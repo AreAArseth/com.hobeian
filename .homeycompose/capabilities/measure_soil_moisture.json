@@ -1,0 +1,15 @@
+{
+  "type": "number",
+  "title": {
+    "en": "Soil Moisture"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": true,
+  "units": {
+    "en": "%"
+  },
+  "min": 0,
+  "max": 100
+}
+

@@ -5,6 +5,10 @@
     "build": "tsc",
     "lint": "eslint --ext .js,.ts --ignore-path .gitignore ."
   },
+  "dependencies": {
+    "homey-zigbeedriver": "^2.2.1",
+    "zigbee-clusters": "^2.1.2"
+  },
   "devDependencies": {
     "@tsconfig/node16": "^16.1.8",
     "@types/homey": "npm:homey-apps-sdk-v3-types@^0.3.12",

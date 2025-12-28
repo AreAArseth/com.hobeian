@@ -1,1 +1,64 @@
-{}
+{
+  "capabilities": {
+    "measure_soil_moisture": {
+      "name": "Soil Moisture",
+      "title": "Soil Moisture"
+    }
+  },
+  "drivers": {
+    "zg-303z": {
+      "name": "ZG-303Z Soil Sensor",
+      "capabilities": {
+        "measure_soil_moisture": {
+          "name": "Soil Moisture",
+          "title": "Soil Moisture"
+        },
+        "measure_temperature": {
+          "name": "Temperature",
+          "title": "Temperature"
+        },
+        "measure_humidity": {
+          "name": "Air Humidity",
+          "title": "Air Humidity"
+        },
+        "measure_battery": {
+          "name": "Battery",
+          "title": "Battery"
+        },
+        "alarm_water": {
+          "name": "Water Shortage Alarm",
+          "title": "Water Shortage Alarm"
+        }
+      },
+      "settings": {
+        "temperature_unit": {
+          "label": "Temperature Unit"
+        },
+        "temperature_calibration": {
+          "label": "Temperature Calibration",
+          "hint": "Offset to adjust temperature readings (-30 to +30)"
+        },
+        "humidity_calibration": {
+          "label": "Humidity Calibration",
+          "hint": "Offset to adjust humidity readings (-30 to +30)"
+        },
+        "soil_calibration": {
+          "label": "Soil Moisture Calibration",
+          "hint": "Offset to adjust soil moisture readings (-30 to +30)"
+        },
+        "temperature_sampling": {
+          "label": "Temperature/Humidity Sampling Interval",
+          "hint": "How often to sample temperature and humidity (5-3600 seconds)"
+        },
+        "soil_sampling": {
+          "label": "Soil Moisture Sampling Interval",
+          "hint": "How often to sample soil moisture (5-3600 seconds)"
+        },
+        "soil_warning": {
+          "label": "Soil Dryness Threshold",
+          "hint": "Moisture percentage below which water alarm triggers (0-100%)"
+        }
+      }
+    }
+  }
+}
