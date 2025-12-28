@@ -52,6 +52,12 @@
         "en": "ZG-303Z Soil Sensor"
       },
       "class": "sensor",
+      "platforms": [
+        "local"
+      ],
+      "connectivity": [
+        "zigbee"
+      ],
       "capabilities": [
         "measure_soil_moisture",
         "measure_temperature",
