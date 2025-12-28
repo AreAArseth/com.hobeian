@@ -25,5 +25,21 @@
     "name": "Are Årseth",
     "email": "are@arseth.org"
   },
-  "brandColor": "#4A90E2"
+  "brandColor": "#4A90E2",
+  "contributors": {
+    "developers": [
+      {
+        "name": "Are Årseth",
+        "email": "are@arseth.org"
+      }
+    ],
+    "translators": []
+  },
+  "urls": {
+    "source": "https://github.com/AreAArseth/com.hobeian",
+    "homepage": "https://github.com/AreAArseth/com.hobeian",
+    "bugs": "https://github.com/AreAArseth/com.hobeian/issues",
+    "support": "https://github.com/AreAArseth/com.hobeian/issues"
+  },
+  "contributing": "https://github.com/AreAArseth/com.hobeian/blob/main/CONTRIBUTING.md"
 }
