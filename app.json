@@ -17,6 +17,7 @@
     "climate"
   ],
   "permissions": [],
+  "icon": "/assets/icon.svg",
   "images": {
     "small": "/assets/images/small.png",
     "large": "/assets/images/large.png",
@@ -36,12 +37,11 @@
     ],
     "translators": []
   },
-  "urls": {
-    "source": "https://github.com/AreAArseth/com.hobeian",
-    "homepage": "https://github.com/AreAArseth/com.hobeian",
-    "bugs": "https://github.com/AreAArseth/com.hobeian/issues",
-    "support": "https://github.com/AreAArseth/com.hobeian/issues"
-  },
+  "url": "https://github.com/AreAArseth/com.hobeian",
+  "source": "https://github.com/AreAArseth/com.hobeian",
+  "homepage": "https://github.com/AreAArseth/com.hobeian",
+  "issue": "https://github.com/AreAArseth/com.hobeian/issues",
+  "support": "https://github.com/AreAArseth/com.hobeian/issues",
   "contributing": {
     "url": "https://github.com/AreAArseth/com.hobeian/blob/main/CONTRIBUTING.md"
   },
