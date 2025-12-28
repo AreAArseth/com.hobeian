@@ -2,10 +2,6 @@
 
 Adds support for Hobeian Zigbee devices.
 
-## About This Project
-
-This is a focused project specifically designed for Hobeian sensors. If you're looking for broader Tuya Zigbee device support, check out [Universal Tuya Zigbee](https://github.com/dlnraja/com.tuya.zigbee) ([Homey App Store](https://homey.app/fr-fr/app/com.dlnraja.tuya.zigbee/Universal-Tuya-Zigbee/test/)), which provides comprehensive support for a wide range of Tuya-based Zigbee devices.
-
 ## Supported Devices
 
 ### ZG-303Z Soil Moisture Sensor
