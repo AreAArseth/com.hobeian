@@ -42,6 +42,12 @@
           }
         }
   },
+  "energy": {
+    "batteries": [
+      "AAA",
+      "AAA"
+    ]
+  },
   "settings": [
     {
       "id": "temperature_unit",

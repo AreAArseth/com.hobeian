@@ -26,6 +26,7 @@
     "name": "Are Årseth",
     "email": "are@arseth.org"
   },
+  "brandColor": "#4A90E2",
   "drivers": [
     {
       "id": "zg-303z",
@@ -70,6 +71,12 @@
             ]
           }
         }
+      },
+      "energy": {
+        "batteries": [
+          "AAA",
+          "AAA"
+        ]
       },
       "settings": [
         {
