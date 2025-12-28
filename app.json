@@ -206,6 +206,7 @@
       "title": {
         "en": "Soil Moisture"
       },
+      "icon": "/assets/measure_soil_moisture.svg",
       "getable": true,
       "setable": false,
       "insights": true,
