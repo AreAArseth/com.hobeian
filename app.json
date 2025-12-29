@@ -11,7 +11,7 @@
     "en": "Hobeian"
   },
   "description": {
-    "en": "Adds support for Hobeian devices."
+    "en": "Monitor your plants' soil moisture, temperature, and humidity with Hobeian Zigbee sensors."
   },
   "category": [
     "climate"
