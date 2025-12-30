@@ -5,14 +5,29 @@ import { CLUSTER } from 'zigbee-clusters';
 
 // Import and register Tuya cluster
 import { TuyaSpecificCluster, TuyaDataTypes, TUYA_CLUSTER_ID } from '../../lib/TuyaCluster';
+import {
+  applyTemperatureCalibrationC,
+  clampPercent,
+  computeWaterAlarmFromSoilMoisture,
+  rawTemperatureToCelsius,
+  shouldAcceptUpdate,
+  type TemperatureUnit,
+} from '../../lib/zg303z';
 
 module.exports = class ZG303ZDevice extends ZigBeeDevice {
 
-  private temperatureUnit: 'celsius' | 'fahrenheit' = 'celsius';
+  private temperatureUnit: TemperatureUnit = 'celsius';
   private tuyaCluster: any = null;
+  private lastSoilMoisturePercent?: number;
+
+  private lastSoilAcceptedAtMs?: number;
+  private lastTempHumidityAcceptedAtMs?: number;
 
   async onNodeInit({ zclNode }: { zclNode: any }) {
     this.log('ZG-303Z device initialized');
+
+    // Initialize local state from settings
+    this.temperatureUnit = (this.getSetting('temperature_unit') as TemperatureUnit) || 'celsius';
 
     // Log available endpoints and clusters for debugging
     this.log('Available endpoints:', Object.keys(zclNode.endpoints));
@@ -224,46 +239,87 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
     // Map datapoints to capabilities
     // Verified mappings from actual device traffic:
     // DP 3 = Soil Moisture (0-100%)
-    // DP 5 = Temperature (value / 10 = °C)
+    // DP 5 = Temperature (value / 10 = °C, or °F when unit datapoint indicates Fahrenheit)
     // DP 109 = Air Humidity (0-100%)
     // DP 15 = possibly battery or other setting
     switch (dp) {
       case 3: // Soil Moisture
         if (typeof value === 'number') {
           const calibration = this.getSetting('soil_calibration') || 0;
-          const adjustedValue = Math.max(0, Math.min(100, value + calibration));
+          const adjustedValue = clampPercent(value + calibration);
+
+          const nowMs = Date.now();
+          const soilSamplingSeconds = this.getSetting('soil_sampling') || 0;
+          if (!shouldAcceptUpdate({ lastAcceptedAtMs: this.lastSoilAcceptedAtMs, intervalSeconds: soilSamplingSeconds, nowMs })) {
+            this.log(`Skipping soil moisture update (rate-limited to ${soilSamplingSeconds}s)`);
+            break;
+          }
+
+          this.lastSoilAcceptedAtMs = nowMs;
+          this.lastSoilMoisturePercent = adjustedValue;
+
           this.log(`Setting soil moisture to ${adjustedValue}%`);
-          this.setCapabilityValue('measure_soil_moisture', adjustedValue).catch(this.error);
+          if (this.hasCapability('measure_soil_moisture')) {
+            this.setCapabilityValue('measure_soil_moisture', adjustedValue).catch(this.error);
+          }
+
+          // Local water-shortage alarm derived from dryness threshold setting
+          const threshold = this.getSetting('soil_warning') ?? 70;
+          const alarm = computeWaterAlarmFromSoilMoisture({ soilMoisturePercent: adjustedValue, thresholdPercent: threshold });
+          this.log(`Setting water alarm to ${alarm} (threshold ${threshold}%)`);
+          if (this.hasCapability('alarm_water')) {
+            this.setCapabilityValue('alarm_water', alarm).catch(this.error);
+          }
         }
         break;
 
       case 5: // Temperature (value / 10 = °C)
         if (typeof value === 'number') {
           const calibration = this.getSetting('temperature_calibration') || 0;
-          let temp = value / 10 + calibration;
-          
-          if (this.temperatureUnit === 'fahrenheit') {
-            temp = (temp - 32) * 5 / 9;
+          const nowMs = Date.now();
+          const tempHumiditySamplingSeconds = this.getSetting('temperature_sampling') || 0;
+          if (!shouldAcceptUpdate({ lastAcceptedAtMs: this.lastTempHumidityAcceptedAtMs, intervalSeconds: tempHumiditySamplingSeconds, nowMs })) {
+            this.log(`Skipping temperature update (rate-limited to ${tempHumiditySamplingSeconds}s)`);
+            break;
           }
-          
-          this.log(`Setting temperature to ${temp}°C`);
-          this.setCapabilityValue('measure_temperature', temp).catch(this.error);
+
+          this.lastTempHumidityAcceptedAtMs = nowMs;
+
+          const tempC = applyTemperatureCalibrationC(rawTemperatureToCelsius(value, this.temperatureUnit), calibration);
+          this.log(`Setting temperature to ${tempC}°C (unit=${this.temperatureUnit})`);
+          if (this.hasCapability('measure_temperature')) {
+            this.setCapabilityValue('measure_temperature', tempC).catch(this.error);
+          }
         }
         break;
 
       case 109: // Air Humidity
         if (typeof value === 'number') {
           const calibration = this.getSetting('humidity_calibration') || 0;
-          const adjustedValue = Math.max(0, Math.min(100, value + calibration));
+          const nowMs = Date.now();
+          const tempHumiditySamplingSeconds = this.getSetting('temperature_sampling') || 0;
+          if (!shouldAcceptUpdate({ lastAcceptedAtMs: this.lastTempHumidityAcceptedAtMs, intervalSeconds: tempHumiditySamplingSeconds, nowMs })) {
+            this.log(`Skipping humidity update (rate-limited to ${tempHumiditySamplingSeconds}s)`);
+            break;
+          }
+
+          this.lastTempHumidityAcceptedAtMs = nowMs;
+
+          const adjustedValue = clampPercent(value + calibration);
           this.log(`Setting humidity to ${adjustedValue}%`);
-          this.setCapabilityValue('measure_humidity', adjustedValue).catch(this.error);
+          if (this.hasCapability('measure_humidity')) {
+            this.setCapabilityValue('measure_humidity', adjustedValue).catch(this.error);
+          }
         }
         break;
 
       case 15: // Battery percentage
         if (typeof value === 'number') {
-          this.log(`Setting battery to ${value}%`);
-          this.setCapabilityValue('measure_battery', value).catch(this.error);
+          const battery = clampPercent(value);
+          this.log(`Setting battery to ${battery}%`);
+          if (this.hasCapability('measure_battery')) {
+            this.setCapabilityValue('measure_battery', battery).catch(this.error);
+          }
         }
         break;
 
@@ -271,7 +327,9 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
         if (typeof value === 'number' || typeof value === 'boolean') {
           const alarm = value === 1 || value === true;
           this.log(`Setting water alarm to ${alarm}`);
-          this.setCapabilityValue('alarm_water', alarm).catch(this.error);
+          if (this.hasCapability('alarm_water')) {
+            this.setCapabilityValue('alarm_water', alarm).catch(this.error);
+          }
         }
         break;
 
@@ -330,6 +388,20 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
             await this.tuyaCluster.setDatapointEnum(9, value === 'fahrenheit' ? 1 : 0);
           } catch (err) {
             this.error('Failed to set temperature unit:', err);
+          }
+        }
+      }
+
+      if (key === 'soil_warning') {
+        // Recompute alarm immediately from last known soil moisture (if any)
+        if (typeof this.lastSoilMoisturePercent === 'number') {
+          const alarm = computeWaterAlarmFromSoilMoisture({
+            soilMoisturePercent: this.lastSoilMoisturePercent,
+            thresholdPercent: value ?? 70,
+          });
+          this.log(`Recomputed water alarm to ${alarm} after threshold change`);
+          if (this.hasCapability('alarm_water')) {
+            this.setCapabilityValue('alarm_water', alarm).catch(this.error);
           }
         }
       }
