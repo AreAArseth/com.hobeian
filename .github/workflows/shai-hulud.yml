@@ -1,16 +1,13 @@
 name: Shai-Hulud 2.0 Scan
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  schedule:
-    - cron: '0 3 * * *' # Daily scan at 3 AM UTC
+  workflow_dispatch:
 
 jobs:
   hulud-scan:
     name: Scan for Shai-Hulud 2.0 Compromise
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Shai-Hulud 2.0 Detector
