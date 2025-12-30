@@ -16,7 +16,6 @@ A battery-powered Zigbee soil moisture sensor with temperature and humidity sens
 - Water Shortage Alarm
 
 **Settings:**
-- Temperature Unit (Celsius/Fahrenheit)
 - Temperature Calibration (-30 to +30)
 - Humidity Calibration (-30 to +30)
 - Soil Moisture Calibration (-30 to +30)

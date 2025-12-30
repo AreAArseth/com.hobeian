@@ -5,5 +5,15 @@
     "outDir": ".homeybuild/",
     "typeRoots": ["./types", "./node_modules/@types"],
     "noImplicitAny": false
-  }
+  },
+  "include": [
+    "app.ts",
+    "drivers/**/*.ts",
+    "lib/**/*.ts",
+    "types/**/*.d.ts"
+  ],
+  "exclude": [
+    ".homeybuild/**",
+    "node_modules"
+  ]
 }

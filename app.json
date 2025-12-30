@@ -104,27 +104,6 @@
       },
       "settings": [
         {
-          "id": "temperature_unit",
-          "type": "dropdown",
-          "label": {
-            "en": "Temperature Unit"
-          },
-          "values": [
-            {
-              "id": "celsius",
-              "label": {
-                "en": "Celsius (°C)"
-              }
-            },
-            {
-              "id": "fahrenheit",
-              "label": {
-                "en": "Fahrenheit (°F)"
-              }
-            }
-          ]
-        },
-        {
           "id": "temperature_calibration",
           "type": "number",
           "label": {
@@ -170,7 +149,7 @@
             "en": "Temperature/Humidity Sampling Interval"
           },
           "hint": {
-            "en": "How often to sample temperature and humidity (5-3600 seconds)"
+            "en": "If the sensor can't be configured, this is used to smooth updates (5-3600 seconds)"
           },
           "min": 5,
           "max": 3600,
@@ -186,7 +165,7 @@
             "en": "Soil Moisture Sampling Interval"
           },
           "hint": {
-            "en": "How often to sample soil moisture (5-3600 seconds)"
+            "en": "If the sensor can't be configured, this is used to smooth updates (5-3600 seconds)"
           },
           "min": 5,
           "max": 3600,

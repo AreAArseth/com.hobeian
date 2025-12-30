@@ -1,7 +1,5 @@
 'use strict';
 
-export type TemperatureUnit = 'celsius' | 'fahrenheit';
-
 export function clampNumber(value: number, min: number, max: number): number {
   if (Number.isNaN(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -16,27 +14,38 @@ export function clampPercent(value: number): number {
  *
  * Assumptions:
  * - The sensor reports temperature scaled by 10 (i.e. 234 => 23.4).
- * - When the device is configured to Fahrenheit, it reports °F (still scaled by 10).
  */
-export function rawTemperatureToCelsius(rawTimes10: number, unit: TemperatureUnit): number {
-  const raw = rawTimes10 / 10;
-  if (unit === 'fahrenheit') return (raw - 32) * 5 / 9;
-  return raw;
+export function rawTemperatureTimes10ToCelsius(rawTimes10: number): number {
+  return rawTimes10 / 10;
 }
 
 export function applyTemperatureCalibrationC(tempC: number, calibrationC: number): number {
   return tempC + calibrationC;
 }
 
-export function shouldAcceptUpdate(params: {
-  lastAcceptedAtMs?: number;
-  intervalSeconds?: number;
-  nowMs: number;
-}): boolean {
-  const { lastAcceptedAtMs, intervalSeconds, nowMs } = params;
-  const intervalMs = Math.max(0, Math.floor((intervalSeconds ?? 0) * 1000));
-  if (!lastAcceptedAtMs) return true;
-  return nowMs - lastAcceptedAtMs >= intervalMs;
+/**
+ * Exponential moving average with a time-based smoothing factor.
+ *
+ * tauSeconds:
+ * - 0 => no smoothing (output = next)
+ * - higher => smoother / slower response
+ */
+export function emaUpdate(params: {
+  previous?: number;
+  next: number;
+  dtSeconds?: number;
+  tauSeconds?: number;
+}): number {
+  const { previous, next } = params;
+  if (typeof previous !== 'number' || Number.isNaN(previous)) return next;
+
+  const tau = Math.max(0, params.tauSeconds ?? 0);
+  const dt = Math.max(0, params.dtSeconds ?? 0);
+  if (tau === 0 || dt === 0) return next;
+
+  // alpha = 1 - exp(-dt/tau)
+  const alpha = 1 - Math.exp(-dt / tau);
+  return previous + alpha * (next - previous);
 }
 
 export function computeWaterAlarmFromSoilMoisture(params: {
@@ -46,4 +55,3 @@ export function computeWaterAlarmFromSoilMoisture(params: {
   const { soilMoisturePercent, thresholdPercent } = params;
   return soilMoisturePercent < clampPercent(thresholdPercent);
 }
-

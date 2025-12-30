@@ -2,9 +2,9 @@
   "name": "com.hobeian",
   "version": "1.0.3",
   "scripts": {
-    "build": "tsc",
-    "lint": "eslint --ext .js,.ts --ignore-path .gitignore .",
-    "test": "npm run build && node --test tests"
+    "build": "npx --no-install tsc",
+    "lint": "npx --no-install eslint --ext .js,.ts --ignore-path .gitignore --ignore-pattern \"types/**\" --ignore-pattern \".homeybuild/**\" .",
+    "test": "npm run build && node --test tests/*.test.js"
   },
   "dependencies": {
     "homey-zigbeedriver": "^2.2.1",

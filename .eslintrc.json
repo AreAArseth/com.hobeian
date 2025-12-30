@@ -1,3 +1,25 @@
 {
-  "extends": "athom/homey-app"
+  "extends": "athom/homey-app",
+  "overrides": [
+    {
+      "files": ["drivers/**/*.ts", "lib/**/*.ts"],
+      "rules": {
+        "@typescript-eslint/no-explicit-any": "off",
+        "import/no-unresolved": "off",
+        "import/extensions": "off",
+        "node/no-missing-import": "off"
+      }
+    },
+    {
+      "files": ["tests/**/*.js"],
+      "parserOptions": {
+        "project": null
+      },
+      "rules": {
+        "node/no-unpublished-require": "off",
+        "@typescript-eslint/no-floating-promises": "off",
+        "@typescript-eslint/no-misused-promises": "off"
+      }
+    }
+  ]
 }

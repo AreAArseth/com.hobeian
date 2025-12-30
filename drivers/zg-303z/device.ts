@@ -4,34 +4,37 @@ import { ZigBeeDevice } from 'homey-zigbeedriver';
 import { CLUSTER } from 'zigbee-clusters';
 
 // Import and register Tuya cluster
-import { TuyaSpecificCluster, TuyaDataTypes, TUYA_CLUSTER_ID } from '../../lib/TuyaCluster';
+import { TuyaDataTypes, TUYA_CLUSTER_ID } from '../../lib/TuyaCluster';
 import {
   applyTemperatureCalibrationC,
   clampPercent,
   computeWaterAlarmFromSoilMoisture,
-  rawTemperatureToCelsius,
-  shouldAcceptUpdate,
-  type TemperatureUnit,
+  emaUpdate,
+  rawTemperatureTimes10ToCelsius,
 } from '../../lib/zg303z';
 
 module.exports = class ZG303ZDevice extends ZigBeeDevice {
 
-  private temperatureUnit: TemperatureUnit = 'celsius';
   private tuyaCluster: any = null;
   private lastSoilMoisturePercent?: number;
 
-  private lastSoilAcceptedAtMs?: number;
-  private lastTempHumidityAcceptedAtMs?: number;
+  private lastSoilUpdateAtMs?: number;
+  private lastTempUpdateAtMs?: number;
+  private lastHumidityUpdateAtMs?: number;
+
+  private soilMoistureEma?: number;
+  private temperatureEmaC?: number;
+  private humidityEma?: number;
 
   async onNodeInit({ zclNode }: { zclNode: any }) {
     this.log('ZG-303Z device initialized');
 
-    // Initialize local state from settings
-    this.temperatureUnit = (this.getSetting('temperature_unit') as TemperatureUnit) || 'celsius';
+    // Note: device-side sampling interval is not reliably configurable for this Tuya sensor.
+    // The sampling settings are used as smoothing time constants instead.
 
     // Log available endpoints and clusters for debugging
     this.log('Available endpoints:', Object.keys(zclNode.endpoints));
-    
+
     for (const [endpointId, endpoint] of Object.entries(zclNode.endpoints)) {
       this.log(`Endpoint ${endpointId} clusters:`, Object.keys((endpoint as any).clusters));
     }
@@ -45,13 +48,13 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
 
     // Try to get the Tuya cluster
     this.tuyaCluster = endpoint.clusters['tuya'] || endpoint.clusters[TUYA_CLUSTER_ID];
-    
+
     if (this.tuyaCluster) {
       this.log('Tuya cluster found!');
       this.setupTuyaListeners();
     } else {
       this.log('Tuya cluster not found in named clusters, trying to bind...');
-      
+
       // Try to bind the cluster manually
       try {
         await endpoint.bind('tuya');
@@ -69,7 +72,7 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
     this.registerRawReportHandler(zclNode);
 
     // Try to read battery (may fail if device is sleeping)
-    this.readBattery(endpoint);
+    this.readBattery(endpoint).catch(this.error);
   }
 
   /**
@@ -138,18 +141,18 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
   private parseRawTuyaFrame(frame: Buffer) {
     try {
       this.log('Parsing raw Tuya frame:', frame.toString('hex'));
-      
+
       if (frame.length < 10) {
         this.log('Frame too short:', frame.length);
         return;
       }
 
       let offset = 0;
-      
+
       // Skip ZCL header if present (frame control + seq + command = 3 bytes)
       // Frame control byte is typically 0x09 (cluster specific, server to client) or 0x01
-      if ((frame[0] & 0x03) !== 0x00) {  // Check if cluster specific
-        offset = 3;  // Skip ZCL header
+      if ((frame[0] & 0x03) !== 0x00) { // Check if cluster specific
+        offset = 3; // Skip ZCL header
         this.log('Skipped ZCL header, offset now:', offset);
       }
 
@@ -160,9 +163,9 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
         const dp = frame.readUInt8(offset + 2);
         const datatype = frame.readUInt8(offset + 3);
         const len = frame.readUInt16BE(offset + 4);
-        
+
         this.log(`Tuya DP: status=${status}, transid=${transid}, dp=${dp}, type=${datatype}, len=${len}`);
-        
+
         if (len > 0 && offset + 6 + len <= frame.length) {
           const data = frame.slice(offset + 6, offset + 6 + len);
           this.log(`Extracted DP ${dp}: Type=${datatype}, Data=${data.toString('hex')}`);
@@ -189,9 +192,7 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
 
     this.log('Processing Tuya report:', JSON.stringify(args));
 
-    const dp = args.dp;
-    const datatype = args.datatype;
-    const data = args.data;
+    const { dp, datatype, data } = args;
 
     if (typeof dp === 'number' && data) {
       this.processDataPoint(dp, datatype || 0, Buffer.isBuffer(data) ? data : Buffer.from([data]));
@@ -239,33 +240,40 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
     // Map datapoints to capabilities
     // Verified mappings from actual device traffic:
     // DP 3 = Soil Moisture (0-100%)
-    // DP 5 = Temperature (value / 10 = °C, or °F when unit datapoint indicates Fahrenheit)
+    // DP 5 = Temperature (value / 10 = °C)
     // DP 109 = Air Humidity (0-100%)
     // DP 15 = possibly battery or other setting
     switch (dp) {
       case 3: // Soil Moisture
         if (typeof value === 'number') {
           const calibration = this.getSetting('soil_calibration') || 0;
-          const adjustedValue = clampPercent(value + calibration);
+          const rawPercent = clampPercent(value + calibration);
 
           const nowMs = Date.now();
-          const soilSamplingSeconds = this.getSetting('soil_sampling') || 0;
-          if (!shouldAcceptUpdate({ lastAcceptedAtMs: this.lastSoilAcceptedAtMs, intervalSeconds: soilSamplingSeconds, nowMs })) {
-            this.log(`Skipping soil moisture update (rate-limited to ${soilSamplingSeconds}s)`);
-            break;
-          }
+          const dtSeconds = this.lastSoilUpdateAtMs ? (nowMs - this.lastSoilUpdateAtMs) / 1000 : undefined;
+          this.lastSoilUpdateAtMs = nowMs;
 
-          this.lastSoilAcceptedAtMs = nowMs;
-          this.lastSoilMoisturePercent = adjustedValue;
+          const tauSeconds = this.getSetting('soil_sampling') || 0;
+          const smoothed = clampPercent(emaUpdate({
+            previous: this.soilMoistureEma,
+            next: rawPercent,
+            dtSeconds,
+            tauSeconds,
+          }));
+          this.soilMoistureEma = smoothed;
+          this.lastSoilMoisturePercent = smoothed;
 
-          this.log(`Setting soil moisture to ${adjustedValue}%`);
+          this.log(`Setting soil moisture to ${smoothed}% (raw=${rawPercent}%, tau=${tauSeconds}s)`);
           if (this.hasCapability('measure_soil_moisture')) {
-            this.setCapabilityValue('measure_soil_moisture', adjustedValue).catch(this.error);
+            this.setCapabilityValue('measure_soil_moisture', smoothed).catch(this.error);
           }
 
           // Local water-shortage alarm derived from dryness threshold setting
           const threshold = this.getSetting('soil_warning') ?? 70;
-          const alarm = computeWaterAlarmFromSoilMoisture({ soilMoisturePercent: adjustedValue, thresholdPercent: threshold });
+          const alarm = computeWaterAlarmFromSoilMoisture({
+            soilMoisturePercent: smoothed,
+            thresholdPercent: threshold,
+          });
           this.log(`Setting water alarm to ${alarm} (threshold ${threshold}%)`);
           if (this.hasCapability('alarm_water')) {
             this.setCapabilityValue('alarm_water', alarm).catch(this.error);
@@ -277,18 +285,22 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
         if (typeof value === 'number') {
           const calibration = this.getSetting('temperature_calibration') || 0;
           const nowMs = Date.now();
-          const tempHumiditySamplingSeconds = this.getSetting('temperature_sampling') || 0;
-          if (!shouldAcceptUpdate({ lastAcceptedAtMs: this.lastTempHumidityAcceptedAtMs, intervalSeconds: tempHumiditySamplingSeconds, nowMs })) {
-            this.log(`Skipping temperature update (rate-limited to ${tempHumiditySamplingSeconds}s)`);
-            break;
-          }
+          const dtSeconds = this.lastTempUpdateAtMs ? (nowMs - this.lastTempUpdateAtMs) / 1000 : undefined;
+          this.lastTempUpdateAtMs = nowMs;
 
-          this.lastTempHumidityAcceptedAtMs = nowMs;
+          const tauSeconds = this.getSetting('temperature_sampling') || 0;
+          const rawTempC = applyTemperatureCalibrationC(rawTemperatureTimes10ToCelsius(value), calibration);
+          const smoothedTempC = emaUpdate({
+            previous: this.temperatureEmaC,
+            next: rawTempC,
+            dtSeconds,
+            tauSeconds,
+          });
+          this.temperatureEmaC = smoothedTempC;
 
-          const tempC = applyTemperatureCalibrationC(rawTemperatureToCelsius(value, this.temperatureUnit), calibration);
-          this.log(`Setting temperature to ${tempC}°C (unit=${this.temperatureUnit})`);
+          this.log(`Setting temperature to ${smoothedTempC}°C (raw=${rawTempC}°C, tau=${tauSeconds}s)`);
           if (this.hasCapability('measure_temperature')) {
-            this.setCapabilityValue('measure_temperature', tempC).catch(this.error);
+            this.setCapabilityValue('measure_temperature', smoothedTempC).catch(this.error);
           }
         }
         break;
@@ -297,18 +309,22 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
         if (typeof value === 'number') {
           const calibration = this.getSetting('humidity_calibration') || 0;
           const nowMs = Date.now();
-          const tempHumiditySamplingSeconds = this.getSetting('temperature_sampling') || 0;
-          if (!shouldAcceptUpdate({ lastAcceptedAtMs: this.lastTempHumidityAcceptedAtMs, intervalSeconds: tempHumiditySamplingSeconds, nowMs })) {
-            this.log(`Skipping humidity update (rate-limited to ${tempHumiditySamplingSeconds}s)`);
-            break;
-          }
+          const dtSeconds = this.lastHumidityUpdateAtMs ? (nowMs - this.lastHumidityUpdateAtMs) / 1000 : undefined;
+          this.lastHumidityUpdateAtMs = nowMs;
 
-          this.lastTempHumidityAcceptedAtMs = nowMs;
+          const tauSeconds = this.getSetting('temperature_sampling') || 0;
+          const rawPercent = clampPercent(value + calibration);
+          const smoothed = clampPercent(emaUpdate({
+            previous: this.humidityEma,
+            next: rawPercent,
+            dtSeconds,
+            tauSeconds,
+          }));
+          this.humidityEma = smoothed;
 
-          const adjustedValue = clampPercent(value + calibration);
-          this.log(`Setting humidity to ${adjustedValue}%`);
+          this.log(`Setting humidity to ${smoothed}% (raw=${rawPercent}%, tau=${tauSeconds}s)`);
           if (this.hasCapability('measure_humidity')) {
-            this.setCapabilityValue('measure_humidity', adjustedValue).catch(this.error);
+            this.setCapabilityValue('measure_humidity', smoothed).catch(this.error);
           }
         }
         break;
@@ -330,13 +346,6 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
           if (this.hasCapability('alarm_water')) {
             this.setCapabilityValue('alarm_water', alarm).catch(this.error);
           }
-        }
-        break;
-
-      case 9: // Temperature unit
-        if (typeof value === 'number') {
-          this.temperatureUnit = value === 0 ? 'celsius' : 'fahrenheit';
-          this.log(`Temperature unit: ${this.temperatureUnit}`);
         }
         break;
 
@@ -378,19 +387,6 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
 
     for (const key of changedKeys) {
       const value = newSettings[key];
-      
-      if (key === 'temperature_unit') {
-        this.temperatureUnit = value;
-        
-        // Send to device if Tuya cluster available
-        if (this.tuyaCluster) {
-          try {
-            await this.tuyaCluster.setDatapointEnum(9, value === 'fahrenheit' ? 1 : 0);
-          } catch (err) {
-            this.error('Failed to set temperature unit:', err);
-          }
-        }
-      }
 
       if (key === 'soil_warning') {
         // Recompute alarm immediately from last known soil moisture (if any)
@@ -415,4 +411,4 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
     this.log('ZG-303Z device deleted');
   }
 
-}
+};

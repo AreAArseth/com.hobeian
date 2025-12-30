@@ -6,9 +6,9 @@ const assert = require('node:assert/strict');
 const {
   clampNumber,
   clampPercent,
-  rawTemperatureToCelsius,
+  rawTemperatureTimes10ToCelsius,
   applyTemperatureCalibrationC,
-  shouldAcceptUpdate,
+  emaUpdate,
   computeWaterAlarmFromSoilMoisture,
 } = require('../.homeybuild/lib/zg303z');
 
@@ -25,25 +25,40 @@ test('clampPercent clamps to 0..100', () => {
   assert.equal(clampPercent(200), 100);
 });
 
-test('rawTemperatureToCelsius interprets celsius correctly (x10)', () => {
-  assert.equal(rawTemperatureToCelsius(234, 'celsius'), 23.4);
-});
-
-test('rawTemperatureToCelsius converts fahrenheit correctly (x10)', () => {
-  // 75.2°F ~= 24°C
-  const c = rawTemperatureToCelsius(752, 'fahrenheit');
-  assert.ok(Math.abs(c - 24) < 0.2);
+test('rawTemperatureTimes10ToCelsius converts correctly (x10)', () => {
+  assert.equal(rawTemperatureTimes10ToCelsius(234), 23.4);
 });
 
 test('applyTemperatureCalibrationC applies offset in °C', () => {
   assert.equal(applyTemperatureCalibrationC(20, 2), 22);
 });
 
-test('shouldAcceptUpdate rate-limits by interval', () => {
-  const now = 1_000_000;
-  assert.equal(shouldAcceptUpdate({ lastAcceptedAtMs: undefined, intervalSeconds: 10, nowMs: now }), true);
-  assert.equal(shouldAcceptUpdate({ lastAcceptedAtMs: now - 9_000, intervalSeconds: 10, nowMs: now }), false);
-  assert.equal(shouldAcceptUpdate({ lastAcceptedAtMs: now - 10_000, intervalSeconds: 10, nowMs: now }), true);
+test('emaUpdate: tau=0 means no smoothing', () => {
+  assert.equal(emaUpdate({
+    previous: 10,
+    next: 20,
+    dtSeconds: 5,
+    tauSeconds: 0,
+  }), 20);
+});
+
+test('emaUpdate: dt=0 means no smoothing', () => {
+  assert.equal(emaUpdate({
+    previous: 10,
+    next: 20,
+    dtSeconds: 0,
+    tauSeconds: 60,
+  }), 20);
+});
+
+test('emaUpdate: with tau>0, output moves toward next', () => {
+  const v = emaUpdate({
+    previous: 0,
+    next: 100,
+    dtSeconds: 10,
+    tauSeconds: 100,
+  });
+  assert.ok(v > 0 && v < 100);
 });
 
 test('computeWaterAlarmFromSoilMoisture triggers below threshold', () => {
@@ -51,4 +66,3 @@ test('computeWaterAlarmFromSoilMoisture triggers below threshold', () => {
   assert.equal(computeWaterAlarmFromSoilMoisture({ soilMoisturePercent: 70, thresholdPercent: 70 }), false);
   assert.equal(computeWaterAlarmFromSoilMoisture({ soilMoisturePercent: 80, thresholdPercent: 70 }), false);
 });
-
