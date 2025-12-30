@@ -1,2 +1,19 @@
-- name: Shai-Hulud 2.0 Detector
-  uses: gensecaihq/Shai-Hulud-2.0-Detector@v2.0.0
+name: Shai-Hulud 2.0 Scan
+on:
+  workflow_dispatch:
+
+jobs:
+  hulud-scan:
+    name: Scan for Shai-Hulud 2.0 Compromise
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shai-Hulud 2.0 Detector
+        uses: gensecaihq/Shai-Hulud-2.0-Detector@v1
+        with:
+          fail-on-critical: true
+          scan-lockfiles: true
+          scan-node-modules: false
+          output-format: text
