@@ -5,6 +5,7 @@ import { CLUSTER } from 'zigbee-clusters';
 
 // Import and register Tuya cluster
 import { TuyaDataTypes, TUYA_CLUSTER_ID } from '../../lib/TuyaCluster';
+import { decodeTuyaDpValuesFromZclFrame } from '../../lib/tuyaFrame';
 import {
   clampPercent,
   computeWaterAlarmFromSoilMoisture,
@@ -19,6 +20,7 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
 
   private tuyaCluster: any = null;
   private lastSoilMoisturePercent?: number;
+  private dpScheme: 'unknown' | 'legacy' | 'z2m' = 'unknown';
 
   async onNodeInit({ zclNode }: { zclNode: any }) {
     this.log('ZG-303Z device initialized');
@@ -38,6 +40,9 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
       this.error('Endpoint 1 not found');
       return;
     }
+
+    // Tuya "magic packet" trick (helps some devices start reporting)
+    await this.configureMagicPacket(zclNode).catch(this.error);
 
     // Try to get the Tuya cluster
     this.tuyaCluster = endpoint.clusters['tuya'] || endpoint.clusters[TUYA_CLUSTER_ID];
@@ -83,6 +88,7 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
     const soilCalibration = toTuyaPercentCalibration(this.getSetting('soil_calibration') ?? 0);
 
     // Best-effort: device may be sleeping; will apply on next awake/report window.
+    await this.tuyaCluster.setDatapointEnum?.(106, 0); // enforce Celsius
     await this.tuyaCluster.setDatapointValue(111, temperatureSampling);
     await this.tuyaCluster.setDatapointValue(112, soilSampling);
     await this.tuyaCluster.setDatapointValue(110, soilWarning);
@@ -166,44 +172,15 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
    */
   private parseRawTuyaFrame(frame: Buffer) {
     try {
-      this.log('Parsing raw Tuya frame:', frame.toString('hex'));
+      const decoded = decodeTuyaDpValuesFromZclFrame(frame);
+      if (decoded.dpValues.length === 0) return;
 
-      if (frame.length < 10) {
-        this.log('Frame too short:', frame.length);
-        return;
-      }
+      this.log(
+        `Decoded Tuya frame: cmd=${decoded.commandId} status=${decoded.status} transid=${decoded.transid} dpCount=${decoded.dpValues.length}`,
+      );
 
-      let offset = 0;
-
-      // Skip ZCL header if present (frame control + seq + command = 3 bytes)
-      // Frame control byte is typically 0x09 (cluster specific, server to client) or 0x01
-      if ((frame[0] & 0x03) !== 0x00) { // Check if cluster specific
-        offset = 3; // Skip ZCL header
-        this.log('Skipped ZCL header, offset now:', offset);
-      }
-
-      // Parse Tuya payload: [status:1][transid:1][dp:1][datatype:1][length:2][data:length]
-      while (offset + 6 <= frame.length) {
-        const status = frame.readUInt8(offset);
-        const transid = frame.readUInt8(offset + 1);
-        const dp = frame.readUInt8(offset + 2);
-        const datatype = frame.readUInt8(offset + 3);
-        const len = frame.readUInt16BE(offset + 4);
-
-        this.log(`Tuya DP: status=${status}, transid=${transid}, dp=${dp}, type=${datatype}, len=${len}`);
-
-        if (len > 0 && offset + 6 + len <= frame.length) {
-          const data = frame.slice(offset + 6, offset + 6 + len);
-          this.log(`Extracted DP ${dp}: Type=${datatype}, Data=${data.toString('hex')}`);
-          this.processDataPoint(dp, datatype, data);
-          offset += 6 + len;
-        } else if (len === 0) {
-          // Zero length datapoint, skip
-          offset += 6;
-        } else {
-          this.log('Incomplete datapoint, remaining bytes:', frame.length - offset);
-          break;
-        }
+      for (const dpValue of decoded.dpValues) {
+        this.processDataPoint(dpValue.dp, dpValue.datatype, dpValue.data);
       }
     } catch (error) {
       this.error('Error parsing raw Tuya frame:', error);
@@ -264,14 +241,17 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
     this.log(`Processing DP ${dp} = ${value} (type: ${datatype})`);
 
     // Map datapoints to capabilities
-    // Confirmed Tuya DP mapping for ZG-303Z:
+    // Tuya DP mapping for ZG-303Z (Z2M):
     // DP 107 = Soil Moisture (0-100%)
     // DP 101 = Temperature (value / 10 = °C)
     // DP 109 = Air Humidity (0-100%)
     // DP 108 = Battery (0-100%)
     // DP 1   = Water Warning (0/1)
+    //
+    // Some devices/logs appear to show low DP ids (3/5/15/14). We support both.
     switch (dp) {
-      case 107: // Soil Moisture
+      case 107: // Soil Moisture (Z2M)
+      case 3: // Soil Moisture (legacy)
         if (typeof value === 'number') {
           const soilMoisture = clampPercent(value);
           this.lastSoilMoisturePercent = soilMoisture;
@@ -294,7 +274,8 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
         }
         break;
 
-      case 101: // Temperature (value / 10 = °C)
+      case 101: // Temperature (Z2M, value / 10 = °C)
+      case 5: // Temperature (legacy, value / 10 = °C)
         if (typeof value === 'number') {
           const tempC = rawTemperatureTimes10ToCelsius(value);
           this.log(`Setting temperature to ${tempC}°C`);
@@ -314,7 +295,8 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
         }
         break;
 
-      case 108: // Battery percentage
+      case 108: // Battery percentage (Z2M)
+      case 15: // Battery percentage (legacy)
         if (typeof value === 'number') {
           const battery = clampPercent(value);
           this.log(`Setting battery to ${battery}%`);
@@ -324,9 +306,10 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
         }
         break;
 
-      case 1: // Water warning (0=none, 1=alarm)
-        if (typeof value === 'number') {
-          const alarm = value === 1;
+      case 1: // Water warning (Z2M, 0=none, 1=alarm)
+      case 14: // Water warning (legacy)
+        if (typeof value === 'number' || typeof value === 'boolean') {
+          const alarm = value === 1 || value === true;
           this.log(`Setting water alarm to ${alarm}`);
           if (this.hasCapability('alarm_water')) {
             this.setCapabilityValue('alarm_water', alarm).catch(this.error);
@@ -336,6 +319,16 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
 
       default:
         this.log(`Unhandled DP ${dp} = ${value}`);
+    }
+
+    if (this.dpScheme === 'unknown') {
+      if ([101, 107, 108, 109, 110, 111, 112, 102, 104, 105, 106, 1].includes(dp)) {
+        this.dpScheme = 'z2m';
+        this.log('Detected Tuya DP scheme: z2m');
+      } else if ([3, 5, 14, 15].includes(dp)) {
+        this.dpScheme = 'legacy';
+        this.log('Detected Tuya DP scheme: legacy');
+      }
     }
   }
 
@@ -420,6 +413,27 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
    */
   async onDeleted() {
     this.log('ZG-303Z device deleted');
+  }
+
+  private async configureMagicPacket(zclNode: any): Promise<void> {
+    const endpoints = Object.values(zclNode.endpoints || {}) as any[];
+    const candidates = endpoints.filter((e) => e?.clusters?.[CLUSTER.BASIC.NAME]);
+    for (const endpoint of candidates) {
+      try {
+        await endpoint.clusters[CLUSTER.BASIC.NAME].readAttributes([
+          'manufacturerName',
+          'zclVersion',
+          'appVersion',
+          'modelId',
+          'powerSource',
+          0xfffe,
+        ]);
+        this.log('Sent Tuya configureMagicPacket readAttributes');
+        return;
+      } catch (err) {
+        this.log('Tuya configureMagicPacket readAttributes failed on endpoint, trying next:', err);
+      }
+    }
   }
 
 };
