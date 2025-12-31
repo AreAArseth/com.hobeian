@@ -33,7 +33,7 @@
       "settings": {
         "temperature_calibration": {
           "label": "Temperature Calibration",
-          "hint": "Offset to adjust temperature readings (-30 to +30)"
+          "hint": "Offset in °C applied by the sensor (-2.0 to +2.0). Takes effect on next report."
         },
         "humidity_calibration": {
           "label": "Humidity Calibration",
@@ -45,11 +45,11 @@
         },
         "temperature_sampling": {
           "label": "Temperature/Humidity Sampling Interval",
-          "hint": "If the sensor can't be configured, this is used to smooth updates (5-3600 seconds)"
+          "hint": "How often the sensor measures/reports temperature & humidity (5-3600 seconds). Takes effect on next report."
         },
         "soil_sampling": {
           "label": "Soil Moisture Sampling Interval",
-          "hint": "If the sensor can't be configured, this is used to smooth updates (5-3600 seconds)"
+          "hint": "How often the sensor measures/reports soil moisture (5-3600 seconds). Takes effect on next report."
         },
         "soil_warning": {
           "label": "Soil Dryness Threshold",

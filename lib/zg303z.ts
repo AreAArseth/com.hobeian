@@ -9,6 +9,10 @@ export function clampPercent(value: number): number {
   return clampNumber(value, 0, 100);
 }
 
+export function clampInt(value: number, min: number, max: number): number {
+  return Math.round(clampNumber(value, min, max));
+}
+
 /**
  * Convert a raw reported temperature to °C.
  *
@@ -21,6 +25,27 @@ export function rawTemperatureTimes10ToCelsius(rawTimes10: number): number {
 
 export function applyTemperatureCalibrationC(tempC: number, calibrationC: number): number {
   return tempC + calibrationC;
+}
+
+// Tuya ZG-303Z writable datapoints expect integer formats:
+// - Temperature calibration (DP 104): tenths of °C, range -20..20 (== -2.0..+2.0°C)
+// - Humidity/soil calibration (DP 105/102): integer %, range -30..30
+// - Sampling intervals (DP 111/112): seconds, range 5..3600
+// - Soil warning threshold (DP 110): integer %, range 0..100
+export function toTuyaTemperatureCalibrationTenths(offsetC: number): number {
+  return clampInt(offsetC * 10, -20, 20);
+}
+
+export function toTuyaPercentCalibration(offsetPercent: number): number {
+  return clampInt(offsetPercent, -30, 30);
+}
+
+export function toTuyaSamplingSeconds(seconds: number): number {
+  return clampInt(seconds, 5, 3600);
+}
+
+export function toTuyaSoilWarningThresholdPercent(percent: number): number {
+  return clampInt(percent, 0, 100);
 }
 
 /**

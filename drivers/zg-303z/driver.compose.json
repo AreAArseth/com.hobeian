@@ -62,10 +62,10 @@
         "en": "Temperature Calibration"
       },
       "hint": {
-        "en": "Offset to adjust temperature readings (-30 to +30)"
+        "en": "Offset in °C applied by the sensor (-2.0 to +2.0). Takes effect on next report."
       },
-      "min": -30,
-      "max": 30,
+      "min": -2,
+      "max": 2,
       "value": 0
     },
     {
@@ -101,7 +101,7 @@
         "en": "Temperature/Humidity Sampling Interval"
       },
       "hint": {
-        "en": "If the sensor can't be configured, this is used to smooth updates (5-3600 seconds)"
+        "en": "How often the sensor measures/reports temperature & humidity (5-3600 seconds). Takes effect on next report."
       },
       "min": 5,
       "max": 3600,
@@ -117,7 +117,7 @@
         "en": "Soil Moisture Sampling Interval"
       },
       "hint": {
-        "en": "If the sensor can't be configured, this is used to smooth updates (5-3600 seconds)"
+        "en": "How often the sensor measures/reports soil moisture (5-3600 seconds). Takes effect on next report."
       },
       "min": 5,
       "max": 3600,
