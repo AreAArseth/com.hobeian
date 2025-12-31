@@ -106,4 +106,3 @@ class TuyaSpecificCluster extends Cluster {
 Cluster.addCluster(TuyaSpecificCluster);
 
 export { TuyaSpecificCluster, TuyaDataTypes, TUYA_CLUSTER_ID };
-

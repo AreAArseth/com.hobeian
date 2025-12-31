@@ -8,4 +8,4 @@ module.exports = class ZG303ZDriver extends ZigBeeDriver {
     this.log('ZG-303Z Driver has been initialized');
   }
 
-}
+};
