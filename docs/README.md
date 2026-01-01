@@ -19,16 +19,16 @@ This is the main technical documentation covering:
 ---
 
 ### 🔍 [PLAN_REVIEW.md](./PLAN_REVIEW.md)
-**For Developers** - Plan review with corrections and test-first strategy
+**For Developers** - Testing reference and test cases
 
-Critical review document covering:
-- Issues identified in the original plan
-- Code corrections and fixes
-- Missing items analysis
-- Comprehensive test cases for each phase
-- Integration test scenarios
+Testing-focused document covering:
+- Review summary (all corrections applied)
+- Unit tests for each phase
+- Validation scripts
+- Manual test procedures
+- Integration test checklist
 
-**Use this when**: Starting implementation, identifying potential issues, or understanding test requirements.
+**Use this when**: Writing tests, running validations, or checking test requirements.
 
 ---
 
@@ -179,30 +179,33 @@ When updating documentation:
 
 | Document | Version | Status | Last Updated |
 |----------|---------|--------|--------------|
-| IMPLEMENTATION_PLAN.md | 1.1 | ✅ Updated with corrections | 2025-12-31 |
-| PLAN_REVIEW.md | 1.0 | ✅ Complete | 2025-12-31 |
+| IMPLEMENTATION_PLAN.md | 1.1 | ✅ Primary reference (all corrections applied) | 2025-12-31 |
+| PLAN_REVIEW.md | 1.1 | ✅ Testing reference (cleaned up) | 2025-12-31 |
 | TESTING_GUIDE.md | 1.0 | ✅ Complete | 2025-12-31 |
 | QUICK_REFERENCE.md | 1.0 | ✅ Complete | 2025-12-31 |
 | USER_GUIDE.md | 1.0 | ✅ Complete | 2025-12-31 |
-| README.md | 1.0 | ✅ Complete | 2025-12-31 |
+| README.md | 1.1 | ✅ Complete | 2025-12-31 |
 
 ---
 
-## Corrections Applied to IMPLEMENTATION_PLAN.md (v1.1)
+## Corrections Applied
 
-The following corrections from PLAN_REVIEW.md have been applied:
+All corrections have been integrated into `IMPLEMENTATION_PLAN.md` (v1.1):
 
-1. **API Rate Limiting** - Added `checkRateLimit()` method to `PlantbookClient.ts` (Phase 1)
-2. **Plant Data Caching** - Added `getCachedPlantDetail()` with 24-hour TTL to `app.ts` (Phase 1)
-3. **Flow Card Registration** - Added flow card registration in `app.ts` `onInit()` (Phase 1)
-4. **Capability Definitions** - Added all required capability JSON definitions (Phase 2)
-5. **Pairing Session Handlers** - Corrected handler names and patterns in `driver.ts` (Phase 2)
-6. **Device Subscriptions** - Changed from event-based to polling (Phase 3)
-7. **Device Store** - Sensor links now stored in device store instead of settings (Phase 3)
-8. **Device Deletion Handling** - Added listener for linked device removal (Phase 3)
-9. **Improved Pairing UI** - Enhanced HTML templates with better UX (Phase 2)
+| Correction | Phase |
+|------------|-------|
+| API Rate Limiting (`checkRateLimit()`) | 1 |
+| Plant Data Caching (24-hour TTL) | 1 |
+| Flow Card Registration in `onInit()` | 1 |
+| Capability JSON definitions | 2 |
+| Pairing handler patterns | 2 |
+| Polling-based sensor subscriptions | 3 |
+| Device store for sensor links | 3 |
+| Device deletion handling | 3 |
+| Enhanced pairing UI | 2 |
 
-**The IMPLEMENTATION_PLAN.md is now the primary reference document with all corrections applied.**
+**The IMPLEMENTATION_PLAN.md is the primary reference document.**  
+**The PLAN_REVIEW.md now serves as a testing reference.**
 
 ---
 
