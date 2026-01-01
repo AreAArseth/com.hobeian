@@ -177,28 +177,32 @@ When updating documentation:
 
 ## Document Status
 
-| Document | Status | Last Updated |
-|----------|--------|--------------|
-| IMPLEMENTATION_PLAN.md | ✅ Complete | 2025-12-31 |
-| PLAN_REVIEW.md | ✅ Complete | 2025-12-31 |
-| TESTING_GUIDE.md | ✅ Complete | 2025-12-31 |
-| QUICK_REFERENCE.md | ✅ Complete | 2025-12-31 |
-| USER_GUIDE.md | ✅ Complete | 2025-12-31 |
-| README.md | ✅ Complete | 2025-12-31 |
+| Document | Version | Status | Last Updated |
+|----------|---------|--------|--------------|
+| IMPLEMENTATION_PLAN.md | 1.1 | ✅ Updated with corrections | 2025-12-31 |
+| PLAN_REVIEW.md | 1.0 | ✅ Complete | 2025-12-31 |
+| TESTING_GUIDE.md | 1.0 | ✅ Complete | 2025-12-31 |
+| QUICK_REFERENCE.md | 1.0 | ✅ Complete | 2025-12-31 |
+| USER_GUIDE.md | 1.0 | ✅ Complete | 2025-12-31 |
+| README.md | 1.0 | ✅ Complete | 2025-12-31 |
 
 ---
 
-## Key Corrections from Review
+## Corrections Applied to IMPLEMENTATION_PLAN.md (v1.1)
 
-The PLAN_REVIEW.md document identified several important corrections:
+The following corrections from PLAN_REVIEW.md have been applied:
 
-1. **Homey API patterns** - Device subscription syntax corrected
-2. **Missing files** - Rate limiting, caching, error handling added
-3. **Flow card registration** - Must be done in app.ts onInit
-4. **Device store vs settings** - Use store for complex data
-5. **Test-first approach** - Comprehensive test suite added
+1. **API Rate Limiting** - Added `checkRateLimit()` method to `PlantbookClient.ts` (Phase 1)
+2. **Plant Data Caching** - Added `getCachedPlantDetail()` with 24-hour TTL to `app.ts` (Phase 1)
+3. **Flow Card Registration** - Added flow card registration in `app.ts` `onInit()` (Phase 1)
+4. **Capability Definitions** - Added all required capability JSON definitions (Phase 2)
+5. **Pairing Session Handlers** - Corrected handler names and patterns in `driver.ts` (Phase 2)
+6. **Device Subscriptions** - Changed from event-based to polling (Phase 3)
+7. **Device Store** - Sensor links now stored in device store instead of settings (Phase 3)
+8. **Device Deletion Handling** - Added listener for linked device removal (Phase 3)
+9. **Improved Pairing UI** - Enhanced HTML templates with better UX (Phase 2)
 
-**⚠️ Always check PLAN_REVIEW.md before implementing any phase!**
+**The IMPLEMENTATION_PLAN.md is now the primary reference document with all corrections applied.**
 
 ---
 

@@ -1,5 +1,10 @@
 # Open Plantbook Integration - Implementation Plan
 
+> **📋 Document Version 1.1** - This document has been updated with corrections.
+> See [PLAN_REVIEW.md](./PLAN_REVIEW.md) for detailed review notes and [TESTING_GUIDE.md](./TESTING_GUIDE.md) for testing procedures.
+
+---
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -41,6 +46,20 @@ This document outlines the step-by-step implementation plan for integrating Open
 - TypeScript knowledge
 - Homey app development experience
 - Open Plantbook API credentials (from https://open.plantbook.io)
+- Homey CLI installed (`npm install -g homey`)
+
+### Development Approach
+
+This implementation follows a **test-first** development approach:
+
+1. **Before implementing**: Review test requirements for the phase
+2. **Create tests first**: Write unit tests or prepare manual test procedures
+3. **Implement feature**: Build the functionality
+4. **Run tests**: Verify all tests pass
+5. **Document**: Update any documentation if needed
+6. **Proceed**: Move to next feature/phase
+
+See [TESTING_GUIDE.md](./TESTING_GUIDE.md) for complete testing documentation.
 
 ---
 
@@ -265,16 +284,41 @@ import { PlantSearchResult, PlantDetail, TokenResponse, PlantInstanceRegistratio
 
 const PLANTBOOK_BASE_URL = 'https://open.plantbook.io/api/v1';
 const TOKEN_REFRESH_BUFFER = 5 * 60 * 1000; // 5 minutes before expiry
+const MAX_REQUESTS_PER_DAY = 200; // API rate limit
 
 export class PlantbookClient {
   private clientId: string;
   private clientSecret: string;
   private token: TokenResponse | null = null;
   private tokenExpiry: Date | null = null;
+  
+  // Rate limiting
+  private requestCount: number = 0;
+  private requestResetTime: Date = new Date();
 
   constructor(clientId: string, clientSecret: string) {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
+  }
+
+  /**
+   * Check and enforce API rate limits
+   */
+  private checkRateLimit(): void {
+    const now = new Date();
+    
+    // Reset counter daily
+    if (now.getDate() !== this.requestResetTime.getDate() ||
+        now.getMonth() !== this.requestResetTime.getMonth()) {
+      this.requestCount = 0;
+      this.requestResetTime = now;
+    }
+    
+    if (this.requestCount >= MAX_REQUESTS_PER_DAY) {
+      throw new Error('API rate limit exceeded (200 requests/day). Please try again tomorrow.');
+    }
+    
+    this.requestCount++;
   }
 
   /**
@@ -290,6 +334,8 @@ export class PlantbookClient {
       }
     }
 
+    this.checkRateLimit();
+
     try {
       const response = await fetch(`${PLANTBOOK_BASE_URL}/token/`, {
         method: 'POST',
@@ -301,6 +347,7 @@ export class PlantbookClient {
           client_id: this.clientId,
           client_secret: this.clientSecret,
         }),
+        timeout: 10000, // 10 second timeout
       });
 
       if (!response.ok) {
@@ -322,6 +369,7 @@ export class PlantbookClient {
    */
   async searchPlants(query: string): Promise<PlantSearchResult[]> {
     await this.authenticate();
+    this.checkRateLimit();
 
     try {
       const response = await fetch(
@@ -330,6 +378,7 @@ export class PlantbookClient {
           headers: {
             'Authorization': `Bearer ${this.token!.access_token}`,
           },
+          timeout: 10000,
         }
       );
 
@@ -351,9 +400,10 @@ export class PlantbookClient {
    */
   async getPlantDetail(pid: string, lang?: string): Promise<PlantDetail> {
     await this.authenticate();
+    this.checkRateLimit();
 
     try {
-      const url = new URL(`${PLANTBOOK_BASE_URL}/plant/detail/${pid}`);
+      const url = new URL(`${PLANTBOOK_BASE_URL}/plant/detail/${encodeURIComponent(pid)}`);
       if (lang) {
         url.searchParams.set('lang', lang);
       }
@@ -362,6 +412,7 @@ export class PlantbookClient {
         headers: {
           'Authorization': `Bearer ${this.token!.access_token}`,
         },
+        timeout: 10000,
       });
 
       if (!response.ok) {
@@ -381,6 +432,7 @@ export class PlantbookClient {
    */
   async registerPlantInstance(registration: PlantInstanceRegistration): Promise<string> {
     await this.authenticate();
+    this.checkRateLimit();
 
     try {
       const response = await fetch(`${PLANTBOOK_BASE_URL}/sensor-data/instance`, {
@@ -390,6 +442,7 @@ export class PlantbookClient {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(registration),
+        timeout: 10000,
       });
 
       if (!response.ok) {
@@ -404,6 +457,13 @@ export class PlantbookClient {
       throw error;
     }
   }
+
+  /**
+   * Get remaining API requests for today
+   */
+  getRemainingRequests(): number {
+    return Math.max(0, MAX_REQUESTS_PER_DAY - this.requestCount);
+  }
 }
 ```
 
@@ -412,40 +472,191 @@ export class PlantbookClient {
 ```typescript
 import Homey from 'homey';
 import { PlantbookClient } from './lib/PlantbookClient';
+import { PlantDetail } from './lib/PlantbookTypes';
+
+// Cache entry with timestamp
+interface CacheEntry<T> {
+  data: T;
+  timestamp: Date;
+}
 
 class PlantbookApp extends Homey.App {
   private plantbookClient: PlantbookClient | null = null;
+  
+  // Plant data cache (24 hour TTL)
+  private plantCache: Map<string, CacheEntry<PlantDetail>> = new Map();
+  private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
   async onInit() {
     this.log('Plantbook app is running...');
 
     // Initialize client if credentials are set
+    await this.initializeClient();
+
+    // Listen for settings changes
+    this.homey.settings.on('set', async (key: string) => {
+      if (key === 'client_id' || key === 'client_secret') {
+        await this.initializeClient();
+      }
+    });
+
+    // Register flow cards
+    await this.registerFlowCards();
+  }
+
+  /**
+   * Initialize or reinitialize the Plantbook client
+   */
+  private async initializeClient(): Promise<void> {
     const clientId = this.homey.settings.get('client_id');
     const clientSecret = this.homey.settings.get('client_secret');
 
     if (clientId && clientSecret) {
       this.plantbookClient = new PlantbookClient(clientId, clientSecret);
       this.log('Plantbook client initialized');
+      
+      // Test connection
+      try {
+        await this.plantbookClient.authenticate();
+        this.log('Plantbook API connection verified');
+      } catch (error) {
+        this.error('Plantbook API connection failed:', error);
+      }
     } else {
+      this.plantbookClient = null;
       this.log('Plantbook credentials not configured');
     }
-
-    // Listen for settings changes
-    this.homey.settings.on('set', async (key: string) => {
-      if (key === 'client_id' || key === 'client_secret') {
-        const newClientId = this.homey.settings.get('client_id');
-        const newClientSecret = this.homey.settings.get('client_secret');
-        
-        if (newClientId && newClientSecret) {
-          this.plantbookClient = new PlantbookClient(newClientId, newClientSecret);
-          this.log('Plantbook client reinitialized');
-        }
-      }
-    });
   }
 
+  /**
+   * Register all flow cards
+   */
+  private async registerFlowCards(): Promise<void> {
+    // Register device trigger cards (these are triggered from device.ts)
+    // No run listener needed for device triggers - they are triggered programmatically
+    
+    // Register condition cards
+    const plantIsHealthyCondition = this.homey.flow.getConditionCard('plant_is_healthy');
+    plantIsHealthyCondition.registerRunListener(async (args) => {
+      const device = args.device;
+      const healthScore = device.getCapabilityValue('plant_health_score');
+      return healthScore !== null && healthScore >= args.threshold;
+    });
+
+    const plantNeedsAttentionCondition = this.homey.flow.getConditionCard('plant_needs_attention');
+    plantNeedsAttentionCondition.registerRunListener(async (args) => {
+      const device = args.device;
+      const alarms = [
+        'alarm_needs_water', 'alarm_overwatered', 
+        'alarm_too_cold', 'alarm_too_hot',
+        'alarm_low_humidity', 'alarm_low_light', 'alarm_too_bright'
+      ];
+      return alarms.some(alarm => device.getCapabilityValue(alarm) === true);
+    });
+
+    const soilInRangeCondition = this.homey.flow.getConditionCard('soil_in_range');
+    soilInRangeCondition.registerRunListener(async (args) => {
+      const device = args.device;
+      const value = device.getCapabilityValue('measure_soil_moisture');
+      const min = device.getCapabilityValue('optimal_soil_moisture_min');
+      const max = device.getCapabilityValue('optimal_soil_moisture_max');
+      return value !== null && value >= min && value <= max;
+    });
+
+    // Register action cards
+    const waterPlantAction = this.homey.flow.getActionCard('water_plant');
+    waterPlantAction.registerRunListener(async (args) => {
+      const device = args.device;
+      await device.triggerWatering(args.duration);
+      return true;
+    });
+
+    const refreshPlantDataAction = this.homey.flow.getActionCard('refresh_plant_data');
+    refreshPlantDataAction.registerRunListener(async (args) => {
+      const device = args.device;
+      await device.refreshPlantData();
+      return true;
+    });
+
+    this.log('Flow cards registered');
+  }
+
+  /**
+   * Get Plantbook client instance
+   */
   getPlantbookClient(): PlantbookClient | null {
     return this.plantbookClient;
+  }
+
+  /**
+   * Get plant detail with caching
+   * Reduces API calls by caching plant data for 24 hours
+   */
+  async getCachedPlantDetail(pid: string): Promise<PlantDetail | null> {
+    // Check cache first
+    const cached = this.plantCache.get(pid);
+    if (cached) {
+      const age = Date.now() - cached.timestamp.getTime();
+      if (age < this.CACHE_TTL) {
+        this.log(`Plant data for ${pid} served from cache`);
+        return cached.data;
+      }
+    }
+
+    // Fetch from API
+    if (!this.plantbookClient) {
+      this.error('Plantbook client not initialized');
+      return null;
+    }
+
+    try {
+      const data = await this.plantbookClient.getPlantDetail(pid);
+      
+      // Store in cache
+      this.plantCache.set(pid, {
+        data,
+        timestamp: new Date(),
+      });
+      
+      this.log(`Plant data for ${pid} fetched and cached`);
+      return data;
+    } catch (error) {
+      this.error(`Failed to fetch plant data for ${pid}:`, error);
+      
+      // Return stale cache if available
+      if (cached) {
+        this.log(`Returning stale cache for ${pid}`);
+        return cached.data;
+      }
+      
+      return null;
+    }
+  }
+
+  /**
+   * Clear the plant cache
+   */
+  clearPlantCache(): void {
+    this.plantCache.clear();
+    this.log('Plant cache cleared');
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats(): { entries: number; oldestEntry: Date | null } {
+    let oldestEntry: Date | null = null;
+    
+    for (const entry of this.plantCache.values()) {
+      if (!oldestEntry || entry.timestamp < oldestEntry) {
+        oldestEntry = entry.timestamp;
+      }
+    }
+    
+    return {
+      entries: this.plantCache.size,
+      oldestEntry,
+    };
   }
 }
 
@@ -541,14 +752,44 @@ module.exports = PlantbookApp;
 
 ### Testing Checklist
 
+**Structure Validation:**
+- [ ] All required files exist (see Files to Create)
+- [ ] TypeScript compiles without errors (`npm run build`)
+- [ ] ESLint passes (`npm run lint`)
+
+**API Client Tests:**
+- [ ] Valid credentials authenticate successfully
+- [ ] Invalid credentials throw descriptive error
+- [ ] Token caching works (second auth is instant)
+- [ ] Token refresh happens before expiry
+- [ ] Rate limiting prevents >200 requests/day
+- [ ] Search returns results for "monstera"
+- [ ] Search returns empty array for non-existent plant
+- [ ] Search handles special characters correctly
+- [ ] Get plant detail returns complete data
+- [ ] Get plant detail throws for invalid PID
+- [ ] Network timeout is handled gracefully
+
+**App Installation Tests:**
 - [ ] App installs without errors
 - [ ] App settings page shows API credential fields
 - [ ] Client ID and Secret can be saved
-- [ ] API client authenticates successfully with valid credentials
-- [ ] API client handles invalid credentials gracefully
-- [ ] Token refresh works correctly
-- [ ] Search plants endpoint returns results
-- [ ] Get plant detail endpoint returns plant data
+- [ ] Settings change triggers client reinitialization
+- [ ] Flow cards are registered (check logs)
+- [ ] Cache stats available via `getCacheStats()`
+
+**Test Commands:**
+```bash
+# Build and validate
+npm run build
+npm run lint
+
+# Run unit tests (if test framework configured)
+npm test
+
+# Validate with Homey CLI
+homey app validate
+```
 
 ### Checkpoint
 
@@ -557,6 +798,8 @@ At the end of Phase 1, you should be able to:
 - Configure API credentials
 - Successfully authenticate with Plantbook API
 - Search for plants and retrieve plant details
+- See rate limit protection working
+- Verify flow cards are registered in logs
 
 ---
 
@@ -576,15 +819,213 @@ At the end of Phase 1, you should be able to:
 ### Files to Create
 
 ```
-/drivers/
-└── plant/
-    ├── driver.compose.json
-    ├── driver.ts
-    ├── device.ts
-    └── pair/
-        ├── search.html
-        └── configure.html
+/com.openplantbook/
+├── .homeycompose/
+│   └── capabilities/
+│       ├── plant_health_score.json
+│       ├── optimal_soil_moisture_min.json
+│       ├── optimal_soil_moisture_max.json
+│       ├── optimal_temperature_min.json
+│       ├── optimal_temperature_max.json
+│       ├── optimal_humidity_min.json
+│       ├── optimal_humidity_max.json
+│       ├── optimal_light_min.json
+│       └── optimal_light_max.json
+├── drivers/
+│   └── plant/
+│       ├── driver.compose.json
+│       ├── driver.ts
+│       ├── device.ts
+│       ├── assets/
+│       │   └── icon.svg
+│       └── pair/
+│           ├── search.html
+│           └── configure.html
+└── assets/
+    └── icon.svg
 ```
+
+### Step 2.0: Create Capability Definitions
+
+Before creating the driver, we need to define the custom capabilities.
+
+#### `.homeycompose/capabilities/plant_health_score.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Health Score"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": true,
+  "units": {
+    "en": "%"
+  },
+  "min": 0,
+  "max": 100,
+  "icon": "/assets/health.svg"
+}
+```
+
+#### `.homeycompose/capabilities/optimal_soil_moisture_min.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Min Soil Moisture"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": false,
+  "units": {
+    "en": "%"
+  },
+  "min": 0,
+  "max": 100
+}
+```
+
+#### `.homeycompose/capabilities/optimal_soil_moisture_max.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Max Soil Moisture"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": false,
+  "units": {
+    "en": "%"
+  },
+  "min": 0,
+  "max": 100
+}
+```
+
+#### `.homeycompose/capabilities/optimal_temperature_min.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Min Temperature"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": false,
+  "units": {
+    "en": "°C"
+  },
+  "min": -10,
+  "max": 50
+}
+```
+
+#### `.homeycompose/capabilities/optimal_temperature_max.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Max Temperature"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": false,
+  "units": {
+    "en": "°C"
+  },
+  "min": -10,
+  "max": 50
+}
+```
+
+#### `.homeycompose/capabilities/optimal_humidity_min.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Min Humidity"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": false,
+  "units": {
+    "en": "%"
+  },
+  "min": 0,
+  "max": 100
+}
+```
+
+#### `.homeycompose/capabilities/optimal_humidity_max.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Max Humidity"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": false,
+  "units": {
+    "en": "%"
+  },
+  "min": 0,
+  "max": 100
+}
+```
+
+#### `.homeycompose/capabilities/optimal_light_min.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Min Light"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": false,
+  "units": {
+    "en": "lux"
+  },
+  "min": 0,
+  "max": 100000
+}
+```
+
+#### `.homeycompose/capabilities/optimal_light_max.json`
+
+```json
+{
+  "type": "number",
+  "title": {
+    "en": "Max Light"
+  },
+  "getable": true,
+  "setable": false,
+  "insights": false,
+  "units": {
+    "en": "lux"
+  },
+  "min": 0,
+  "max": 100000
+}
+```
+
+> **Note**: The driver will also use standard Homey capabilities:
+> - `measure_soil_moisture` (custom, copy from Hobeian app)
+> - `measure_temperature` (built-in)
+> - `measure_humidity` (built-in)
+> - `measure_luminance` (built-in)
 
 ### Implementation Steps
 
@@ -650,20 +1091,27 @@ At the end of Phase 1, you should be able to:
 
 #### Step 2.2: Create Driver Class (`drivers/plant/driver.ts`)
 
+> **Note**: Homey pairing uses specific handler names. Custom handlers are called from pair HTML views.
+
 ```typescript
-import { Homey } from 'homey';
+import Homey from 'homey';
+import { PlantDetail, PlantSearchResult } from '../../lib/PlantbookTypes';
 
 class PlantDriver extends Homey.Driver {
+  
+  // Store selected plant during pairing session
+  private selectedPlant: PlantDetail | null = null;
+
   async onInit() {
     this.log('Plant driver has been initialized');
   }
 
-  async onPair(session: any) {
-    let searchQuery = '';
-    let selectedPlant: any = null;
+  async onPair(session: Homey.Driver.PairSession) {
+    // Reset state for new pairing session
+    this.selectedPlant = null;
 
-    session.setHandler('search', async (query: string) => {
-      searchQuery = query;
+    // Handler: Search for plants (called from search.html)
+    session.setHandler('searchPlants', async (query: string): Promise<PlantSearchResult[]> => {
       this.log('Searching for plants:', query);
 
       const app = this.homey.app as any;
@@ -682,52 +1130,101 @@ class PlantDriver extends Homey.Driver {
       }
     });
 
-    session.setHandler('select_plant', async (plant: any) => {
-      selectedPlant = plant;
-      this.log('Plant selected:', plant.pid);
-    });
+    // Handler: Get plant details (called from search.html when plant is clicked)
+    session.setHandler('getPlantDetail', async (pid: string): Promise<PlantDetail> => {
+      this.log('Getting plant detail:', pid);
 
-    session.setHandler('get_plant_detail', async (pid: string) => {
       const app = this.homey.app as any;
-      const client = app.getPlantbookClient();
+      
+      // Use cached data when possible
+      const detail = await app.getCachedPlantDetail(pid);
 
-      if (!client) {
-        throw new Error('Plantbook API not configured');
+      if (!detail) {
+        throw new Error('Failed to load plant details');
       }
 
-      try {
-        const detail = await client.getPlantDetail(pid);
-        return detail;
-      } catch (error) {
-        this.error('Get plant detail failed:', error);
-        throw error;
-      }
+      return detail;
     });
 
+    // Handler: Select plant for pairing (called from search.html)
+    session.setHandler('selectPlant', async (plant: PlantDetail): Promise<void> => {
+      this.selectedPlant = plant;
+      this.log('Plant selected:', plant.pid, plant.display_pid);
+    });
+
+    // Handler: Get the currently selected plant (called from configure.html)
+    session.setHandler('getSelectedPlant', async (): Promise<PlantDetail | null> => {
+      return this.selectedPlant;
+    });
+
+    // Handler: Get available sensor devices for linking (called from sensors.html)
+    session.setHandler('getAvailableDevices', async (): Promise<any[]> => {
+      const devices = await this.homey.devices.getDevices();
+      
+      return Object.values(devices).map((device: any) => ({
+        id: device.id,
+        name: device.name,
+        capabilities: Object.keys(device.capabilitiesObj || {}),
+        zone: device.zone?.name || 'Unknown',
+      }));
+    });
+
+    // Handler: Standard Homey handler - list devices to add
     session.setHandler('list_devices', async () => {
-      if (!selectedPlant) {
-        throw new Error('No plant selected');
+      if (!this.selectedPlant) {
+        throw new Error('No plant selected. Please go back and select a plant.');
       }
+
+      // Create unique device ID
+      const deviceId = `plant_${this.selectedPlant.pid.replace(/\s+/g, '_')}_${Date.now()}`;
 
       return [
         {
-          name: selectedPlant.display_pid || selectedPlant.alias,
+          name: this.selectedPlant.display_pid || this.selectedPlant.alias || this.selectedPlant.pid,
           data: {
-            id: `plant_${selectedPlant.pid}_${Date.now()}`,
-            pid: selectedPlant.pid,
+            id: deviceId,
           },
           settings: {
-            pid: selectedPlant.pid,
-            scientific_name: selectedPlant.pid,
+            pid: this.selectedPlant.pid,
+            scientific_name: this.selectedPlant.pid,
+          },
+          store: {
+            plantData: this.selectedPlant,
           },
         },
       ];
+    });
+
+    // Handler: Called when pairing view changes
+    session.setHandler('showView', async (viewId: string) => {
+      this.log('Pairing view changed to:', viewId);
+      
+      // Reset selected plant if going back to search
+      if (viewId === 'search') {
+        this.selectedPlant = null;
+      }
+    });
+  }
+
+  async onRepair(session: Homey.Driver.PairSession, device: Homey.Device) {
+    // Handle device repair (re-pairing)
+    this.log('Repairing device:', device.getName());
+    
+    session.setHandler('getPlantDetail', async (pid: string) => {
+      const app = this.homey.app as any;
+      return await app.getCachedPlantDetail(pid);
     });
   }
 }
 
 module.exports = PlantDriver;
 ```
+
+> **Key Points:**
+> - Handler names are custom and called from HTML views via `Homey.emit('handlerName', data)`
+> - `list_devices` is the standard Homey handler that returns devices to add
+> - `showView` is called when navigating between pairing views
+> - Store plant data in device `store` for persistence
 
 #### Step 2.3: Create Device Class (`drivers/plant/device.ts`)
 
@@ -797,6 +1294,8 @@ module.exports = PlantDevice;
 
 #### Step 2.4: Create Pairing Template - Search (`drivers/plant/pair/search.html`)
 
+> **Note**: Homey pairing templates use `Homey.emit(handlerName, data)` to call session handlers defined in `driver.ts`.
+
 ```html
 <!DOCTYPE html>
 <html>
@@ -807,16 +1306,25 @@ module.exports = PlantDevice;
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       padding: 20px;
+      background: var(--homey-background-color, #fff);
+      color: var(--homey-text-color, #333);
     }
     .search-container {
       margin-bottom: 20px;
     }
     input[type="text"] {
       width: 100%;
-      padding: 10px;
+      padding: 12px;
       font-size: 16px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
+      border: 1px solid var(--homey-border-color, #ddd);
+      border-radius: 8px;
+      box-sizing: border-box;
+      background: var(--homey-input-background, #fff);
+      color: var(--homey-text-color, #333);
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--homey-primary-color, #007bff);
     }
     .results {
       max-height: 400px;
@@ -824,44 +1332,66 @@ module.exports = PlantDevice;
     }
     .plant-item {
       padding: 15px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
+      border: 1px solid var(--homey-border-color, #ddd);
+      border-radius: 8px;
       margin-bottom: 10px;
       cursor: pointer;
-      transition: background-color 0.2s;
+      transition: background-color 0.2s, transform 0.1s;
     }
     .plant-item:hover {
-      background-color: #f5f5f5;
+      background-color: var(--homey-hover-background, #f5f5f5);
+      transform: translateX(2px);
+    }
+    .plant-item.selected {
+      border-color: var(--homey-primary-color, #007bff);
+      background-color: var(--homey-selected-background, #e3f2fd);
     }
     .plant-name {
-      font-weight: bold;
+      font-weight: 600;
       font-size: 16px;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
     }
     .plant-pid {
-      color: #666;
+      color: var(--homey-secondary-text-color, #666);
       font-size: 14px;
     }
     .loading {
       text-align: center;
-      padding: 20px;
-      color: #666;
+      padding: 40px 20px;
+      color: var(--homey-secondary-text-color, #666);
+    }
+    .loading::after {
+      content: '';
+      animation: dots 1.5s infinite;
+    }
+    @keyframes dots {
+      0%, 20% { content: '.'; }
+      40% { content: '..'; }
+      60%, 100% { content: '...'; }
     }
     .error {
       color: #d32f2f;
-      padding: 10px;
+      padding: 12px;
       background-color: #ffebee;
-      border-radius: 4px;
+      border-radius: 8px;
       margin-bottom: 10px;
+    }
+    .hint {
+      text-align: center;
+      color: var(--homey-secondary-text-color, #888);
+      padding: 20px;
+      font-size: 14px;
     }
   </style>
 </head>
 <body>
   <div class="search-container">
-    <input type="text" id="search-input" placeholder="Search for a plant (e.g., Monstera, Snake Plant)">
+    <input type="text" id="search-input" placeholder="Search for a plant (e.g., Monstera, Snake Plant)" autofocus>
   </div>
   <div id="error-container"></div>
-  <div id="results-container" class="results"></div>
+  <div id="results-container" class="results">
+    <div class="hint">Enter a plant name to search the Open Plantbook database</div>
+  </div>
 
   <script>
     const searchInput = document.getElementById('search-input');
@@ -869,36 +1399,40 @@ module.exports = PlantDevice;
     const errorContainer = document.getElementById('error-container');
     let searchTimeout;
 
+    // Focus search input on load
+    searchInput.focus();
+
     searchInput.addEventListener('input', (e) => {
       const query = e.target.value.trim();
       
       if (query.length < 2) {
-        resultsContainer.innerHTML = '';
+        resultsContainer.innerHTML = '<div class="hint">Enter at least 2 characters to search</div>';
         return;
       }
 
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(() => {
         performSearch(query);
-      }, 500);
+      }, 500); // Debounce 500ms
     });
 
     async function performSearch(query) {
-      resultsContainer.innerHTML = '<div class="loading">Searching...</div>';
+      resultsContainer.innerHTML = '<div class="loading">Searching</div>';
       errorContainer.innerHTML = '';
 
       try {
-        const results = await Homey.app.search(query);
+        // Call session handler defined in driver.ts
+        const results = await Homey.emit('searchPlants', query);
         
-        if (results.length === 0) {
-          resultsContainer.innerHTML = '<div class="loading">No plants found</div>';
+        if (!results || results.length === 0) {
+          resultsContainer.innerHTML = '<div class="hint">No plants found. Try a different search term.</div>';
           return;
         }
 
         resultsContainer.innerHTML = results.map(plant => `
-          <div class="plant-item" data-pid="${plant.pid}">
-            <div class="plant-name">${plant.display_pid || plant.alias}</div>
-            <div class="plant-pid">${plant.pid}</div>
+          <div class="plant-item" data-pid="${escapeHtml(plant.pid)}">
+            <div class="plant-name">${escapeHtml(plant.display_pid || plant.alias)}</div>
+            <div class="plant-pid">${escapeHtml(plant.pid)}</div>
           </div>
         `).join('');
 
@@ -906,23 +1440,42 @@ module.exports = PlantDevice;
         document.querySelectorAll('.plant-item').forEach(item => {
           item.addEventListener('click', async () => {
             const pid = item.dataset.pid;
+            
+            // Visual feedback
+            document.querySelectorAll('.plant-item').forEach(i => i.classList.remove('selected'));
+            item.classList.add('selected');
+            
             try {
-              const detail = await Homey.app.get_plant_detail(pid);
-              await Homey.app.select_plant(detail);
-              Homey.emit('continue');
+              // Get full plant details
+              const detail = await Homey.emit('getPlantDetail', pid);
+              
+              // Store selected plant in session
+              await Homey.emit('selectPlant', detail);
+              
+              // Navigate to next view (configure)
+              await Homey.nextView();
             } catch (error) {
-              showError('Failed to load plant details');
+              showError('Failed to load plant details: ' + (error.message || error));
             }
           });
         });
       } catch (error) {
-        showError('Search failed: ' + error.message);
-        resultsContainer.innerHTML = '';
+        showError('Search failed: ' + (error.message || error));
+        resultsContainer.innerHTML = '<div class="hint">Search failed. Please try again.</div>';
       }
     }
 
     function showError(message) {
       errorContainer.innerHTML = `<div class="error">${message}</div>`;
+      setTimeout(() => {
+        errorContainer.innerHTML = '';
+      }, 5000);
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
     }
   </script>
 </body>
@@ -941,95 +1494,158 @@ module.exports = PlantDevice;
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       padding: 20px;
+      background: var(--homey-background-color, #fff);
+      color: var(--homey-text-color, #333);
     }
     .plant-info {
       text-align: center;
       margin-bottom: 30px;
     }
     .plant-image {
-      width: 200px;
-      height: 200px;
+      width: 180px;
+      height: 180px;
       object-fit: cover;
-      border-radius: 8px;
+      border-radius: 12px;
       margin-bottom: 15px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .plant-image.placeholder {
+      background: linear-gradient(135deg, #4caf50 0%, #8bc34a 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 60px;
     }
     .plant-name {
       font-size: 24px;
-      font-weight: bold;
+      font-weight: 600;
       margin-bottom: 5px;
     }
     .plant-pid {
-      color: #666;
+      color: var(--homey-secondary-text-color, #666);
       font-size: 14px;
+      font-style: italic;
     }
     .ranges {
-      background-color: #f5f5f5;
+      background-color: var(--homey-card-background, #f5f5f5);
       padding: 20px;
-      border-radius: 8px;
+      border-radius: 12px;
       margin-bottom: 20px;
     }
-    .range-item {
+    .ranges h3 {
+      margin-top: 0;
       margin-bottom: 15px;
+      font-size: 16px;
+      color: var(--homey-text-color, #333);
+    }
+    .range-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+    }
+    .range-item {
+      background: var(--homey-background-color, #fff);
+      padding: 12px;
+      border-radius: 8px;
     }
     .range-label {
-      font-weight: bold;
-      margin-bottom: 5px;
+      font-weight: 500;
+      margin-bottom: 4px;
+      font-size: 12px;
+      color: var(--homey-secondary-text-color, #888);
+      text-transform: uppercase;
     }
     .range-value {
-      color: #666;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .range-icon {
+      margin-right: 6px;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: var(--homey-secondary-text-color, #666);
+    }
+    .error {
+      color: #d32f2f;
+      padding: 12px;
+      background-color: #ffebee;
+      border-radius: 8px;
+      text-align: center;
     }
   </style>
 </head>
 <body>
-  <div class="plant-info">
-    <img id="plant-image" class="plant-image" src="" alt="Plant">
-    <div class="plant-name" id="plant-name"></div>
-    <div class="plant-pid" id="plant-pid"></div>
-  </div>
-
-  <div class="ranges">
-    <h3>Optimal Care Ranges</h3>
-    <div class="range-item">
-      <div class="range-label">Soil Moisture</div>
-      <div class="range-value" id="soil-moisture"></div>
-    </div>
-    <div class="range-item">
-      <div class="range-label">Temperature</div>
-      <div class="range-value" id="temperature"></div>
-    </div>
-    <div class="range-item">
-      <div class="range-label">Humidity</div>
-      <div class="range-value" id="humidity"></div>
-    </div>
-    <div class="range-item">
-      <div class="range-label">Light</div>
-      <div class="range-value" id="light"></div>
-    </div>
+  <div id="content">
+    <div class="loading">Loading plant details...</div>
   </div>
 
   <script>
     (async () => {
+      const content = document.getElementById('content');
+      
       try {
-        const plant = await Homey.app.get_selected_plant();
+        // Get selected plant from session (stored when user clicked plant in search)
+        const plant = await Homey.emit('getSelectedPlant');
         
-        if (plant.image_url) {
-          document.getElementById('plant-image').src = plant.image_url;
+        if (!plant) {
+          content.innerHTML = '<div class="error">No plant selected. Please go back and select a plant.</div>';
+          return;
         }
-        document.getElementById('plant-name').textContent = plant.display_pid || plant.alias;
-        document.getElementById('plant-pid').textContent = plant.pid;
+
+        // Build the UI
+        content.innerHTML = `
+          <div class="plant-info">
+            ${plant.image_url 
+              ? `<img class="plant-image" src="${escapeHtml(plant.image_url)}" alt="${escapeHtml(plant.display_pid)}" onerror="this.classList.add('placeholder'); this.innerHTML='🌱'; this.onerror=null;">`
+              : `<div class="plant-image placeholder">🌱</div>`
+            }
+            <div class="plant-name">${escapeHtml(plant.display_pid || plant.alias)}</div>
+            <div class="plant-pid">${escapeHtml(plant.pid)}</div>
+          </div>
+
+          <div class="ranges">
+            <h3>Optimal Care Ranges</h3>
+            <div class="range-grid">
+              <div class="range-item">
+                <div class="range-label"><span class="range-icon">💧</span>Soil Moisture</div>
+                <div class="range-value">${plant.min_soil_moist}% - ${plant.max_soil_moist}%</div>
+              </div>
+              <div class="range-item">
+                <div class="range-label"><span class="range-icon">🌡️</span>Temperature</div>
+                <div class="range-value">${plant.min_temp}°C - ${plant.max_temp}°C</div>
+              </div>
+              <div class="range-item">
+                <div class="range-label"><span class="range-icon">💨</span>Humidity</div>
+                <div class="range-value">${plant.min_env_humid}% - ${plant.max_env_humid}%</div>
+              </div>
+              <div class="range-item">
+                <div class="range-label"><span class="range-icon">☀️</span>Light</div>
+                <div class="range-value">${formatLux(plant.min_light_lux)} - ${formatLux(plant.max_light_lux)}</div>
+              </div>
+            </div>
+          </div>
+        `;
         
-        document.getElementById('soil-moisture').textContent = 
-          `${plant.min_soil_moist}% - ${plant.max_soil_moist}%`;
-        document.getElementById('temperature').textContent = 
-          `${plant.min_temp}°C - ${plant.max_temp}°C`;
-        document.getElementById('humidity').textContent = 
-          `${plant.min_env_humid}% - ${plant.max_env_humid}%`;
-        document.getElementById('light').textContent = 
-          `${plant.min_light_lux} - ${plant.max_light_lux} lux`;
       } catch (error) {
         console.error('Failed to load plant:', error);
+        content.innerHTML = `<div class="error">Failed to load plant details: ${escapeHtml(error.message || error)}</div>`;
       }
     })();
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
+    }
+
+    function formatLux(lux) {
+      if (lux >= 10000) {
+        return Math.round(lux / 1000) + 'k lux';
+      }
+      return lux + ' lux';
+    }
   </script>
 </body>
 </html>
@@ -1143,8 +1759,12 @@ Add to `drivers/plant/driver.compose.json`:
 
 Modify `drivers/plant/device.ts`:
 
+> **⚠️ IMPORTANT**: This implementation uses the device store (not settings) for sensor links,
+> and properly handles the Homey API for device capability subscriptions.
+
 ```typescript
-import { Homey } from 'homey';
+import Homey from 'homey';
+import { PlantDetail } from '../../lib/PlantbookTypes';
 
 interface LinkedSensor {
   deviceId: string;
@@ -1152,40 +1772,98 @@ interface LinkedSensor {
   type: string;
 }
 
+interface LinkedController {
+  deviceId: string;
+  capability: string;
+  type: string;
+}
+
 class PlantDevice extends Homey.Device {
-  private plantData: any = null;
+  private plantData: PlantDetail | null = null;
   private linkedSensors: Map<string, LinkedSensor> = new Map();
-  private sensorListeners: Map<string, Function> = new Map();
+  private linkedControllers: Map<string, LinkedController> = new Map();
+  private capabilityInstances: Map<string, any> = new Map();
+  private pollingInterval: NodeJS.Timeout | null = null;
 
   async onInit() {
     this.log('Plant device initialized:', this.getName());
 
+    // Load plant data (with caching)
     const pid = this.getSetting('pid');
     if (pid) {
       await this.refreshPlantData();
     }
 
+    // Set up sensor subscriptions
     await this.setupSensorLinks();
+    
+    // Set up controller links
+    await this.setupControllerLinks();
+
+    // Listen for device deletions (linked sensors being removed)
+    this.homey.devices.on('device.delete', (device: any) => {
+      this.handleDeviceDeleted(device);
+    });
+
+    // Start polling for sensor updates (fallback for devices that don't emit events)
+    this.startPolling();
   }
 
-  // ... existing refreshPlantData method ...
+  /**
+   * Refresh plant data from API (with caching)
+   */
+  async refreshPlantData(): Promise<void> {
+    const pid = this.getSetting('pid');
+    if (!pid) {
+      this.log('No PID configured');
+      return;
+    }
+
+    try {
+      const app = this.homey.app as any;
+      
+      // Use cached data when possible
+      this.plantData = await app.getCachedPlantDetail(pid);
+      
+      if (!this.plantData) {
+        this.error('Failed to load plant data');
+        return;
+      }
+
+      // Update optimal range capabilities
+      await this.setCapabilityValue('optimal_soil_moisture_min', this.plantData.min_soil_moist).catch(this.error);
+      await this.setCapabilityValue('optimal_soil_moisture_max', this.plantData.max_soil_moist).catch(this.error);
+      await this.setCapabilityValue('optimal_temperature_min', this.plantData.min_temp).catch(this.error);
+      await this.setCapabilityValue('optimal_temperature_max', this.plantData.max_temp).catch(this.error);
+      await this.setCapabilityValue('optimal_humidity_min', this.plantData.min_env_humid).catch(this.error);
+      await this.setCapabilityValue('optimal_humidity_max', this.plantData.max_env_humid).catch(this.error);
+      await this.setCapabilityValue('optimal_light_min', this.plantData.min_light_lux).catch(this.error);
+      await this.setCapabilityValue('optimal_light_max', this.plantData.max_light_lux).catch(this.error);
+
+      this.log('Plant data refreshed:', this.plantData.display_pid);
+    } catch (error) {
+      this.error('Failed to refresh plant data:', error);
+    }
+  }
 
   /**
-   * Set up listeners for all linked sensors
+   * Set up listeners for all linked sensors using device store
    */
-  async setupSensorLinks() {
+  async setupSensorLinks(): Promise<void> {
     const sensorTypes = ['soil_moisture', 'temperature', 'humidity', 'light'];
 
     for (const type of sensorTypes) {
-      const linkString = this.getSetting(`sensor_${type}`);
+      // Use device store for sensor links (more reliable than settings for complex data)
+      const linkString = this.getStoreValue(`sensor_${type}`) || this.getSetting(`sensor_${type}`);
       if (!linkString) continue;
 
-      const [deviceId, capability] = linkString.split(':');
-      if (!deviceId || !capability) {
+      const parts = linkString.split(':');
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
         this.log(`Invalid sensor link format for ${type}: ${linkString}`);
         continue;
       }
 
+      const [deviceId, capability] = parts;
       this.linkedSensors.set(type, { deviceId, capability, type });
       await this.subscribeToSensor(deviceId, capability, type);
     }
@@ -1195,39 +1873,83 @@ class PlantDevice extends Homey.Device {
 
   /**
    * Subscribe to a sensor's capability changes
+   * 
+   * NOTE: Homey SDK doesn't support direct capability event subscriptions on other devices.
+   * We use makeCapabilityInstance for our own capabilities, and polling for external devices.
    */
-  async subscribeToSensor(deviceId: string, capability: string, type: string) {
+  async subscribeToSensor(deviceId: string, capability: string, type: string): Promise<void> {
     try {
-      const device = await this.homey.devices.getDevice({ id: deviceId });
+      // Get the device from Homey's device manager
+      const devices = await this.homey.devices.getDevices();
+      const device = Object.values(devices).find((d: any) => d.id === deviceId);
+      
       if (!device) {
         this.error(`Device not found: ${deviceId}`);
         return;
       }
 
       // Get initial value
-      const initialValue = device.getCapabilityValue(capability);
+      const capabilityObj = (device as any).capabilitiesObj?.[capability];
+      const initialValue = capabilityObj?.value;
+      
       if (initialValue !== null && initialValue !== undefined) {
         await this.onSensorReading(type, initialValue, deviceId);
       }
 
-      // Create listener for changes
-      const listener = async (value: any) => {
-        await this.onSensorReading(type, value, deviceId);
-      };
+      // Store the subscription info for polling
+      this.capabilityInstances.set(`${deviceId}:${capability}`, {
+        deviceId,
+        capability,
+        type,
+        lastValue: initialValue,
+      });
 
-      device.on(`capability.${capability}`, listener);
-      this.sensorListeners.set(`${deviceId}:${capability}`, listener);
-
-      this.log(`Subscribed to ${deviceId}:${capability} for ${type}`);
+      this.log(`Subscribed to ${deviceId}:${capability} for ${type} (initial: ${initialValue})`);
     } catch (error) {
       this.error(`Failed to subscribe to sensor ${deviceId}:`, error);
     }
   }
 
   /**
+   * Start polling for sensor updates
+   * This is a fallback since we can't directly subscribe to other devices' capability changes
+   */
+  private startPolling(): void {
+    // Poll every 30 seconds
+    this.pollingInterval = setInterval(async () => {
+      await this.pollSensorValues();
+    }, 30000);
+  }
+
+  /**
+   * Poll all linked sensors for updated values
+   */
+  private async pollSensorValues(): Promise<void> {
+    const devices = await this.homey.devices.getDevices();
+    
+    for (const [key, instance] of this.capabilityInstances) {
+      try {
+        const device = Object.values(devices).find((d: any) => d.id === instance.deviceId);
+        if (!device) continue;
+
+        const capabilityObj = (device as any).capabilitiesObj?.[instance.capability];
+        const currentValue = capabilityObj?.value;
+
+        // Only update if value changed
+        if (currentValue !== instance.lastValue && currentValue !== null && currentValue !== undefined) {
+          instance.lastValue = currentValue;
+          await this.onSensorReading(instance.type, currentValue, instance.deviceId);
+        }
+      } catch (error) {
+        this.error(`Error polling ${key}:`, error);
+      }
+    }
+  }
+
+  /**
    * Handle incoming sensor reading
    */
-  async onSensorReading(type: string, value: number, deviceId: string) {
+  async onSensorReading(type: string, value: number, deviceId: string): Promise<void> {
     this.log(`Sensor reading: ${type} = ${value} from ${deviceId}`);
 
     // Map sensor type to capability
@@ -1243,6 +1965,15 @@ class PlantDevice extends Homey.Device {
       await this.setCapabilityValue(capability, value).catch(this.error);
     }
 
+    // Check thresholds and update alarms
+    await this.checkThresholds(type, value);
+
+    // Recalculate health score
+    await this.calculateHealthScore();
+
+    // Run automations
+    await this.runAutomations(type, value);
+
     // Trigger flow card for sensor update
     await this.homey.flow.getDeviceTriggerCard('plant_sensor_updated')
       .trigger(this, { sensor_type: type, value })
@@ -1250,24 +1981,52 @@ class PlantDevice extends Homey.Device {
   }
 
   /**
-   * Unsubscribe from a sensor
+   * Handle a linked device being deleted
    */
-  async unsubscribeFromSensor(deviceId: string, capability: string) {
-    const listener = this.sensorListeners.get(`${deviceId}:${capability}`);
-    if (listener) {
-      try {
-        const device = await this.homey.devices.getDevice({ id: deviceId });
-        if (device) {
-          device.off(`capability.${capability}`, listener);
-        }
-      } catch (error) {
-        this.error(`Failed to unsubscribe from ${deviceId}:`, error);
+  private handleDeviceDeleted(device: any): void {
+    const deviceId = device?.id || device?.getData?.()?.id;
+    if (!deviceId) return;
+
+    // Check if this device was a linked sensor
+    for (const [type, sensor] of this.linkedSensors) {
+      if (sensor.deviceId === deviceId) {
+        this.log(`Linked sensor ${type} (${deviceId}) was deleted`);
+        this.linkedSensors.delete(type);
+        this.capabilityInstances.delete(`${deviceId}:${sensor.capability}`);
+        
+        // Clear the store value
+        this.setStoreValue(`sensor_${type}`, null).catch(this.error);
       }
-      this.sensorListeners.delete(`${deviceId}:${capability}`);
+    }
+
+    // Check if this device was a linked controller
+    for (const [type, controller] of this.linkedControllers) {
+      if (controller.deviceId === deviceId) {
+        this.log(`Linked controller ${type} (${deviceId}) was deleted`);
+        this.linkedControllers.delete(type);
+        
+        // Clear the store value
+        this.setStoreValue(`controller_${type}`, null).catch(this.error);
+      }
     }
   }
 
-  async onSettings({ oldSettings, newSettings, changedKeys }: any) {
+  /**
+   * Unsubscribe from a sensor
+   */
+  async unsubscribeFromSensor(deviceId: string, capability: string): Promise<void> {
+    const key = `${deviceId}:${capability}`;
+    if (this.capabilityInstances.has(key)) {
+      this.capabilityInstances.delete(key);
+      this.log(`Unsubscribed from ${key}`);
+    }
+  }
+
+  async onSettings({ oldSettings, newSettings, changedKeys }: {
+    oldSettings: Record<string, any>;
+    newSettings: Record<string, any>;
+    changedKeys: string[];
+  }): Promise<void> {
     if (changedKeys.includes('pid')) {
       await this.refreshPlantData();
     }
@@ -1275,31 +2034,78 @@ class PlantDevice extends Homey.Device {
     // Re-setup sensors if sensor links changed
     const sensorKeys = changedKeys.filter((k: string) => k.startsWith('sensor_'));
     if (sensorKeys.length > 0) {
-      // Unsubscribe old listeners
-      for (const [key, listener] of this.sensorListeners) {
-        const [deviceId, capability] = key.split(':');
-        await this.unsubscribeFromSensor(deviceId, capability);
-      }
-      this.sensorListeners.clear();
+      // Clear existing subscriptions
+      this.capabilityInstances.clear();
       this.linkedSensors.clear();
+
+      // Also save to store for persistence
+      for (const key of sensorKeys) {
+        await this.setStoreValue(key, newSettings[key]).catch(this.error);
+      }
 
       await this.setupSensorLinks();
     }
+
+    // Re-setup controllers if controller links changed
+    const controllerKeys = changedKeys.filter((k: string) => k.startsWith('controller_'));
+    if (controllerKeys.length > 0) {
+      this.linkedControllers.clear();
+      
+      for (const key of controllerKeys) {
+        await this.setStoreValue(key, newSettings[key]).catch(this.error);
+      }
+      
+      await this.setupControllerLinks();
+    }
   }
 
-  async onDeleted() {
-    // Clean up all listeners
-    for (const [key, listener] of this.sensorListeners) {
-      const [deviceId, capability] = key.split(':');
-      await this.unsubscribeFromSensor(deviceId, capability);
+  async onDeleted(): Promise<void> {
+    // Stop polling
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
     }
-    this.sensorListeners.clear();
+
+    // Clean up
+    this.capabilityInstances.clear();
     this.linkedSensors.clear();
+    this.linkedControllers.clear();
+    
+    this.log('Plant device deleted');
+  }
+
+  // Placeholder methods - implemented in later phases
+  async checkThresholds(type: string, value: number): Promise<void> {
+    // Implemented in Phase 5
+  }
+
+  async calculateHealthScore(): Promise<void> {
+    // Implemented in Phase 4
+  }
+
+  async runAutomations(type: string, value: number): Promise<void> {
+    // Implemented in Phase 6
+  }
+
+  async setupControllerLinks(): Promise<void> {
+    // Implemented in Phase 6
+  }
+
+  async triggerWatering(duration?: number): Promise<void> {
+    // Implemented in Phase 6
   }
 }
 
 module.exports = PlantDevice;
 ```
+
+> **Key Changes from Original Plan:**
+> 
+> 1. **Device Store vs Settings**: Sensor links are stored in device store (`setStoreValue`/`getStoreValue`) for reliability
+> 2. **Polling Instead of Events**: Homey doesn't support subscribing to other devices' capability changes directly, so we use polling
+> 3. **Device Deletion Handling**: Added listener for when linked devices are deleted
+> 4. **Cached Plant Data**: Uses `getCachedPlantDetail` from app to reduce API calls
+> 5. **Proper Typing**: Added TypeScript interfaces for better type safety
 
 #### Step 3.3: Add Capabilities to Driver Compose
 
@@ -2460,7 +3266,7 @@ At the end of Phase 10, you should be able to:
 
 ## Appendix
 
-### A. Capability Definitions
+### A. Complete Capability Definitions
 
 All capability JSON files should follow this structure:
 
@@ -2481,12 +3287,74 @@ All capability JSON files should follow this structure:
 }
 ```
 
+**Required Custom Capabilities:**
+
+| Capability | Type | Unit | Phase |
+|------------|------|------|-------|
+| `plant_health_score` | number | % | 2 |
+| `optimal_soil_moisture_min` | number | % | 2 |
+| `optimal_soil_moisture_max` | number | % | 2 |
+| `optimal_temperature_min` | number | °C | 2 |
+| `optimal_temperature_max` | number | °C | 2 |
+| `optimal_humidity_min` | number | % | 2 |
+| `optimal_humidity_max` | number | % | 2 |
+| `optimal_light_min` | number | lux | 2 |
+| `optimal_light_max` | number | lux | 2 |
+| `alarm_needs_water` | boolean | - | 5 |
+| `alarm_overwatered` | boolean | - | 5 |
+| `alarm_too_cold` | boolean | - | 5 |
+| `alarm_too_hot` | boolean | - | 5 |
+| `alarm_low_humidity` | boolean | - | 5 |
+| `alarm_low_light` | boolean | - | 5 |
+| `alarm_too_bright` | boolean | - | 5 |
+
+**Standard Homey Capabilities Used:**
+
+| Capability | Type | Description |
+|------------|------|-------------|
+| `measure_temperature` | number | Current temperature |
+| `measure_humidity` | number | Current humidity |
+| `measure_luminance` | number | Current light level |
+
+**Custom Capability from Hobeian (copy):**
+
+| Capability | Type | Description |
+|------------|------|-------------|
+| `measure_soil_moisture` | number | Current soil moisture |
+
 ### B. API Rate Limits
 
-Open Plantbook API has a limit of 200 requests per day per user (as of November 2025). Implement:
-- Token caching (already done)
-- Request throttling
-- Error handling for rate limits
+Open Plantbook API has a limit of **200 requests per day** per user (as of November 2025).
+
+**Implementation:**
+```typescript
+// In PlantbookClient.ts
+private requestCount: number = 0;
+private requestResetTime: Date = new Date();
+private readonly MAX_REQUESTS_PER_DAY = 200;
+
+private checkRateLimit(): void {
+  const now = new Date();
+  
+  // Reset counter daily
+  if (now.getDate() !== this.requestResetTime.getDate()) {
+    this.requestCount = 0;
+    this.requestResetTime = now;
+  }
+  
+  if (this.requestCount >= MAX_REQUESTS_PER_DAY) {
+    throw new Error('API rate limit exceeded. Try again tomorrow.');
+  }
+  
+  this.requestCount++;
+}
+```
+
+**Caching Strategy:**
+- Plant data cached for 24 hours
+- Cache hit returns immediately (no API call)
+- Stale cache returned on API error
+- Cache cleared on app restart (acceptable since data doesn't change often)
 
 ### C. Error Codes
 
@@ -2494,16 +3362,160 @@ Common API errors:
 - `not_authenticated`: Invalid or missing credentials
 - `validation_error`: Invalid request data
 - `not_found`: Plant PID not found
-- `rate_limit_exceeded`: Too many requests
+- `rate_limit_exceeded`: Too many requests (HTTP 429)
 
-### D. Resources
+**Error Handling Pattern:**
+```typescript
+try {
+  const result = await client.searchPlants(query);
+} catch (error) {
+  if (error.message.includes('rate limit')) {
+    // Show user-friendly message about daily limit
+  } else if (error.message.includes('Authentication')) {
+    // Prompt to check credentials
+  } else {
+    // Generic error handling
+  }
+}
+```
+
+### D. Homey API Patterns
+
+**⚠️ Important Corrections:**
+
+1. **Device Capability Subscriptions**: Homey SDK doesn't support subscribing to other devices' capability changes directly. Use polling instead:
+   ```typescript
+   // WRONG - doesn't work
+   device.on('capability.measure_temperature', handler);
+   
+   // CORRECT - use polling
+   setInterval(async () => {
+     const value = device.getCapabilityValue('measure_temperature');
+     if (value !== lastValue) {
+       await handleValueChange(value);
+       lastValue = value;
+     }
+   }, 30000);
+   ```
+
+2. **Device Store vs Settings**: Use store for complex/internal data:
+   ```typescript
+   // Settings - for user-configurable options
+   this.getSetting('auto_water_enabled');
+   
+   // Store - for internal data structures
+   this.getStoreValue('sensor_links');
+   this.setStoreValue('sensor_links', data);
+   ```
+
+3. **Flow Card Registration**: Must be done in `app.ts` `onInit`:
+   ```typescript
+   async onInit() {
+     // Conditions need run listeners
+     this.homey.flow.getConditionCard('plant_is_healthy')
+       .registerRunListener(async (args) => { ... });
+     
+     // Actions need run listeners
+     this.homey.flow.getActionCard('water_plant')
+       .registerRunListener(async (args) => { ... });
+     
+     // Device triggers are called from device.ts, no listener needed here
+   }
+   ```
+
+4. **Getting Other Devices**:
+   ```typescript
+   // Get all devices
+   const devices = await this.homey.devices.getDevices();
+   
+   // Find specific device
+   const device = Object.values(devices).find(d => d.id === deviceId);
+   
+   // Get capability value
+   const value = device.capabilitiesObj?.measure_temperature?.value;
+   ```
+
+### E. File Structure Summary
+
+```
+com.openplantbook/
+├── .homeycompose/
+│   ├── app.json
+│   ├── capabilities/
+│   │   ├── plant_health_score.json
+│   │   ├── optimal_*.json (8 files)
+│   │   └── alarm_*.json (7 files)
+│   └── flow/
+│       ├── triggers/ (8 files)
+│       ├── conditions/ (8 files)
+│       └── actions/ (7 files)
+├── drivers/
+│   └── plant/
+│       ├── driver.compose.json
+│       ├── driver.ts
+│       ├── device.ts
+│       ├── assets/
+│       │   └── icon.svg
+│       └── pair/
+│           ├── search.html
+│           ├── configure.html
+│           ├── sensors.html
+│           └── controllers.html
+├── lib/
+│   ├── PlantbookClient.ts
+│   └── PlantbookTypes.ts
+├── tests/
+│   ├── unit/
+│   └── scripts/
+├── assets/
+│   ├── icon.svg
+│   └── images/
+├── locales/
+│   └── en.json
+├── app.ts
+├── api.ts
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+### F. Testing Strategy
+
+See `TESTING_GUIDE.md` for complete testing documentation.
+
+**Quick Reference:**
+```bash
+# Unit tests
+npm test
+
+# Structure validation
+bash tests/scripts/validate-structure.sh
+
+# Flow card validation
+bash tests/scripts/validate-flow-cards.sh
+
+# Full build and validate
+npm run build && homey app validate
+```
+
+### G. Resources
 
 - [Open Plantbook API Docs](https://documenter.getpostman.com/view/12627470/TVsxBRjD)
 - [Homey SDK Documentation](https://apps.developer.athom.com/)
 - [JSON Time Series Spec](https://docs.eagle.io/en/latest/reference/historic/jts.html)
+- [Open Plantbook Client GitHub](https://github.com/slaxor505/OpenPlantbook-client)
 
 ---
 
-**Document Version**: 1.0  
+## Revision History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2025-12-31 | Initial plan |
+| 1.1 | 2025-12-31 | Added corrections: rate limiting, caching, Homey API patterns, capability definitions, testing strategy |
+
+---
+
+**Document Version**: 1.1  
 **Last Updated**: 2025-12-31  
 **Author**: Implementation Team
