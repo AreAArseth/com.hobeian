@@ -18,6 +18,35 @@ This is the main technical documentation covering:
 
 ---
 
+### 🔍 [PLAN_REVIEW.md](./PLAN_REVIEW.md)
+**For Developers** - Plan review with corrections and test-first strategy
+
+Critical review document covering:
+- Issues identified in the original plan
+- Code corrections and fixes
+- Missing items analysis
+- Comprehensive test cases for each phase
+- Integration test scenarios
+
+**Use this when**: Starting implementation, identifying potential issues, or understanding test requirements.
+
+---
+
+### 🧪 [TESTING_GUIDE.md](./TESTING_GUIDE.md)
+**For Developers** - Complete testing strategy and procedures
+
+Testing documentation covering:
+- Test directory structure
+- Unit test implementations
+- Validation scripts
+- Manual test procedures
+- Integration test checklists
+- Bug reporting format
+
+**Use this when**: Writing tests, running validation, or performing manual testing.
+
+---
+
 ### ⚡ [QUICK_REFERENCE.md](./QUICK_REFERENCE.md)
 **For Developers** - Quick lookup guide
 
@@ -51,10 +80,12 @@ User-friendly guide covering:
 
 ```
 docs/
-├── README.md (this file)
+├── README.md              (this file - navigation guide)
 ├── IMPLEMENTATION_PLAN.md (main technical guide)
-├── QUICK_REFERENCE.md (developer quick reference)
-└── USER_GUIDE.md (end user guide)
+├── PLAN_REVIEW.md         (corrections and test cases)
+├── TESTING_GUIDE.md       (testing strategy and procedures)
+├── QUICK_REFERENCE.md     (developer quick reference)
+└── USER_GUIDE.md          (end user guide)
 ```
 
 ## Quick Start
@@ -125,14 +156,49 @@ When updating documentation:
 - [Homey SDK Documentation](https://apps.developer.athom.com/)
 - [Open Plantbook Website](https://open.plantbook.io)
 
+## Recommended Reading Order
+
+### For New Developers
+1. **IMPLEMENTATION_PLAN.md** - Understand the full scope
+2. **PLAN_REVIEW.md** - Learn about corrections and testing
+3. **TESTING_GUIDE.md** - Set up testing infrastructure
+4. **QUICK_REFERENCE.md** - Keep open during development
+
+### For Ongoing Development
+1. **PLAN_REVIEW.md** - Check test requirements for current phase
+2. **TESTING_GUIDE.md** - Run tests before/after changes
+3. **QUICK_REFERENCE.md** - Quick lookups
+
+### For Documentation/User Support
+1. **USER_GUIDE.md** - Understand user perspective
+2. **IMPLEMENTATION_PLAN.md** - Technical details if needed
+
+---
+
 ## Document Status
 
 | Document | Status | Last Updated |
 |----------|--------|--------------|
 | IMPLEMENTATION_PLAN.md | ✅ Complete | 2025-12-31 |
+| PLAN_REVIEW.md | ✅ Complete | 2025-12-31 |
+| TESTING_GUIDE.md | ✅ Complete | 2025-12-31 |
 | QUICK_REFERENCE.md | ✅ Complete | 2025-12-31 |
 | USER_GUIDE.md | ✅ Complete | 2025-12-31 |
 | README.md | ✅ Complete | 2025-12-31 |
+
+---
+
+## Key Corrections from Review
+
+The PLAN_REVIEW.md document identified several important corrections:
+
+1. **Homey API patterns** - Device subscription syntax corrected
+2. **Missing files** - Rate limiting, caching, error handling added
+3. **Flow card registration** - Must be done in app.ts onInit
+4. **Device store vs settings** - Use store for complex data
+5. **Test-first approach** - Comprehensive test suite added
+
+**⚠️ Always check PLAN_REVIEW.md before implementing any phase!**
 
 ---
 
