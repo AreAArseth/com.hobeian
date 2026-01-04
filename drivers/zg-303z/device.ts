@@ -21,6 +21,9 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
 
   private tuyaCluster: any = null;
   private lastSoilMoisturePercent?: number;
+  private pendingSettingsApply = false;
+  private endpoint1: any = null;
+  private lastWakeHandledAt = 0;
 
   async onNodeInit({ zclNode }: { zclNode: any }) {
     this.log('ZG-303Z device initialized');
@@ -34,15 +37,24 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
       this.log(`Endpoint ${endpointId} clusters:`, Object.keys((endpoint as any).clusters));
     }
 
-    // Get endpoint 1
+    // Get endpoint 1 and store for later use
     const endpoint = zclNode.endpoints[1];
     if (!endpoint) {
       this.error('Endpoint 1 not found');
       return;
     }
+    this.endpoint1 = endpoint;
 
-    // Tuya "magic packet" trick (helps some devices start reporting)
-    await this.configureMagicPacket(zclNode).catch(this.error);
+    // Detect if this is a sleepy (battery-powered) device
+    const isSleepy = this.isDeviceSleepy();
+    this.log(`Device is ${isSleepy ? 'sleepy (battery-powered)' : 'always-on'}`);
+
+    // Only send magic packet on first init (pairing), not on app restarts
+    const isFirstInit = typeof (this as any).isFirstInit === 'function' ? (this as any).isFirstInit() : false;
+    if (isFirstInit) {
+      this.log('First init - sending Tuya magic packet');
+      await this.configureMagicPacket(zclNode).catch(this.error);
+    }
 
     // Try to get the Tuya cluster
     this.tuyaCluster = endpoint.clusters['tuya'] || endpoint.clusters[TUYA_CLUSTER_ID];
@@ -50,7 +62,6 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
     if (this.tuyaCluster) {
       this.log('Tuya cluster found!');
       this.setupTuyaListeners();
-      await this.applyDeviceSettings().catch(this.error);
     } else {
       this.log('Tuya cluster not found in named clusters, trying to bind...');
 
@@ -61,7 +72,6 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
         if (this.tuyaCluster) {
           this.log('Tuya cluster bound successfully');
           this.setupTuyaListeners();
-          await this.applyDeviceSettings().catch(this.error);
         }
       } catch (err) {
         this.log('Could not bind Tuya cluster:', err);
@@ -71,8 +81,18 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
     // Register for raw cluster commands on the Tuya cluster
     this.registerRawReportHandler(zclNode);
 
-    // Try to read battery (may fail if device is sleeping)
-    this.readBattery(endpoint).catch(this.error);
+    // For sleepy devices, defer commands until device wakes up
+    // For always-on devices, apply settings immediately
+    if (isSleepy) {
+      this.log('Device is sleepy - will apply settings and read battery when device wakes up');
+      // Do NOT set pendingSettingsApply = true here - no user changes pending yet
+    } else {
+      // Device is always-on, apply settings immediately
+      if (this.tuyaCluster) {
+        await this.applyDeviceSettings().catch(this.error);
+      }
+      await this.readBattery(endpoint).catch(this.error);
+    }
   }
 
   private async applyDeviceSettings(): Promise<void> {
@@ -146,6 +166,9 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
           this.log('Raw Tuya frame received, cluster:', clusterId);
           this.log('Frame data:', frame.toString('hex'));
           this.parseRawTuyaFrame(frame);
+
+          // Device is awake since we received data - trigger wake handler
+          this.onDeviceAwake().catch(this.error);
         }
         return originalHandleFrame(clusterId, frame, meta);
       };
@@ -345,11 +368,16 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
   }): Promise<void> {
     this.log('Settings changed:', changedKeys);
 
-    for (const key of changedKeys) {
-      const value = newSettings[key];
+    const isSleepy = this.isDeviceSleepy();
 
-      // Apply settings to device (best-effort, device may be sleeping)
-      if (this.tuyaCluster) {
+    // For sleepy devices, queue settings for when device wakes up
+    if (isSleepy) {
+      this.log('Device is sleepy - queueing settings for next wake-up');
+      this.pendingSettingsApply = true;
+    } else if (this.tuyaCluster) {
+      // Device is always-on, apply settings immediately
+      for (const key of changedKeys) {
+        const value = newSettings[key];
         try {
           if (key === 'temperature_sampling') {
             await this.tuyaCluster.setDatapointValue(DP_WRITE.TEMP_SAMPLING_INTERVAL, toTuyaSamplingSeconds(value ?? DEFAULTS.SAMPLING_SECONDS));
@@ -370,21 +398,22 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
             await this.tuyaCluster.setDatapointValue(DP_WRITE.SOIL_CALIBRATION, toTuyaPercentCalibration(value ?? DEFAULTS.CALIBRATION));
           }
         } catch (err) {
-          this.error('Failed to apply setting to device (may be sleeping):', err);
+          this.error('Failed to apply setting to device:', err);
         }
       }
+    }
 
-      if (key === 'soil_warning') {
-        // Recompute alarm immediately from last known soil moisture (if any)
-        if (typeof this.lastSoilMoisturePercent === 'number') {
-          const alarm = computeWaterAlarmFromSoilMoisture({
-            soilMoisturePercent: this.lastSoilMoisturePercent,
-            thresholdPercent: value ?? DEFAULTS.SOIL_WARNING_PERCENT,
-          });
-          this.log(`Recomputed water alarm to ${alarm} after threshold change`);
-          if (this.hasCapability('alarm_water')) {
-            this.setCapabilityValue('alarm_water', alarm).catch(this.error);
-          }
+    // Always recompute local alarm immediately (doesn't require device communication)
+    if (changedKeys.includes('soil_warning')) {
+      const value = newSettings['soil_warning'];
+      if (typeof this.lastSoilMoisturePercent === 'number') {
+        const alarm = computeWaterAlarmFromSoilMoisture({
+          soilMoisturePercent: this.lastSoilMoisturePercent,
+          thresholdPercent: value ?? DEFAULTS.SOIL_WARNING_PERCENT,
+        });
+        this.log(`Recomputed water alarm to ${alarm} after threshold change`);
+        if (this.hasCapability('alarm_water')) {
+          this.setCapabilityValue('alarm_water', alarm).catch(this.error);
         }
       }
     }
@@ -395,6 +424,14 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
    */
   async onDeleted() {
     this.log('ZG-303Z device deleted');
+  }
+
+  /**
+   * Called when a sleepy device announces itself (wakes up and rejoins network)
+   */
+  async onEndDeviceAnnounce(): Promise<void> {
+    this.log('Device announced (woke up from sleep)');
+    await this.onDeviceAwake();
   }
 
   private async configureMagicPacket(zclNode: any): Promise<void> {
@@ -415,6 +452,46 @@ module.exports = class ZG303ZDevice extends ZigBeeDevice {
       } catch (err) {
         this.log('Tuya configureMagicPacket readAttributes failed on endpoint, trying next:', err);
       }
+    }
+  }
+
+  /**
+   * Check if device is sleepy (battery-powered, not always listening)
+   */
+  private isDeviceSleepy(): boolean {
+    return (this as any).node?.receiveWhenIdle === false;
+  }
+
+  /**
+   * Centralized handler for device wake-up events.
+   * Called from onEndDeviceAnnounce and handleFrame when data is received.
+   * Debounced to avoid duplicate processing within a short window.
+   */
+  private async onDeviceAwake(): Promise<void> {
+    const now = Date.now();
+    const DEBOUNCE_MS = 5000;
+
+    if (now - this.lastWakeHandledAt < DEBOUNCE_MS) {
+      this.log('Skipping duplicate wake handling (debounce)');
+      return;
+    }
+    this.lastWakeHandledAt = now;
+
+    this.log('Handling device wake-up');
+
+    // Mark device as available
+    await this.setAvailable().catch(this.error);
+
+    // Only apply settings if user changed them while device was sleeping
+    if (this.pendingSettingsApply) {
+      this.log('Applying pending user settings...');
+      await this.applyDeviceSettings().catch(this.error);
+      this.pendingSettingsApply = false;
+    }
+
+    // Read battery status
+    if (this.endpoint1) {
+      await this.readBattery(this.endpoint1).catch(this.error);
     }
   }
 
