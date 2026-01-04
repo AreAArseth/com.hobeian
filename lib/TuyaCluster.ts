@@ -14,6 +14,14 @@ const TuyaDataTypes = {
   BITMAP: 0x05,
 };
 
+// Tuya protocol command IDs
+export const TUYA_CMD = {
+  DATA_QUERY: 0x03,
+} as const;
+
+// Tuya magic attribute for waking devices
+export const TUYA_MAGIC_ATTRIBUTE = 0xFFFE;
+
 class TuyaSpecificCluster extends Cluster {
 
   static get ID() {
@@ -66,17 +74,29 @@ class TuyaSpecificCluster extends Cluster {
     };
   }
 
+  // Declare the dynamically created command method from COMMANDS
+  datapoint!: (args: {
+    status: number;
+    transid: number;
+    dp: number;
+    datatype: number;
+    length: number;
+    data: Buffer;
+  }, opts?: { disableDefaultResponse?: boolean; waitForResponse?: boolean }) => Promise<void>;
+
   // Send a datapoint command to the device
   async sendDatapoint(dp: number, datatype: number, data: Buffer) {
     const transid = Math.floor(Math.random() * 255);
-    return this.writeCommand('datapoint', {
+    // Use the dynamically created datapoint method from COMMANDS
+    // disableDefaultResponse: true to avoid waiting for a response that may not come
+    return this.datapoint({
       status: 0,
       transid,
       dp,
       datatype,
       length: data.length,
       data,
-    });
+    }, { disableDefaultResponse: true });
   }
 
   // Helper to send a boolean value

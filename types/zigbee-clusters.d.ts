@@ -9,8 +9,8 @@ declare module 'zigbee-clusters' {
     static addCluster(cluster: typeof Cluster): void;
     
     on(event: string, callback: (...args: any[]) => void): void;
-    writeCommand(command: string, args: any): Promise<any>;
     readAttributes(attributes: string[]): Promise<any>;
+    sendFrame(data: { cmdId: number; frameControl?: string[]; data?: Buffer }): Promise<void>;
   }
 
   export class BoundCluster {

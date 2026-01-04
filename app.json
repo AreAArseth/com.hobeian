@@ -83,8 +83,16 @@
         }
       },
       "zigbee": {
-        "manufacturerName": "HOBEIAN",
-        "productId": "ZG-303Z",
+        "manufacturerName": [
+          "HOBEIAN",
+          "_TZE200_wqashyqo",
+          "_TZE200_npj9bug3",
+          "_TZE200_wrmhp6b3"
+        ],
+        "productId": [
+          "ZG-303Z",
+          "TS0601"
+        ],
         "endpoints": {
           "1": {
             "clusters": [
@@ -185,7 +193,7 @@
           },
           "min": 0,
           "max": 100,
-          "value": 70,
+          "value": 30,
           "units": {
             "en": "%"
           }
