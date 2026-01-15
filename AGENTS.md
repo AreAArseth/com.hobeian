@@ -94,7 +94,6 @@ Battery-powered Zigbee devices sleep 99% of the time to conserve power. They can
    ```typescript
    async onEndDeviceAnnounce(): Promise<void> {
      // Device just woke up - now we can communicate
-     await this.sendDataQuery();
      if (this.pendingSettingsApply) {
        await this.applyDeviceSettings();
        this.pendingSettingsApply = false;
@@ -107,6 +106,14 @@ Battery-powered Zigbee devices sleep 99% of the time to conserve power. They can
    const isFirstInit = typeof this.isFirstInit === 'function' ? this.isFirstInit() : false;
    ```
    Only send configuration commands (like magic packet) on first init.
+
+### Wake Handler Best Practices
+
+- Use centralized `onDeviceAwake()` pattern called from multiple detection points
+- Implement 5-second debounce to prevent duplicate wake processing
+- **NEVER call sendDataQuery() in wake handlers** - causes infinite loops (device reports on its own)
+- Only push settings when user actually changed them via `pendingSettingsApply` flag
+- Tuya: only send magic packet on first init (`isFirstInit()`), not app restarts
 
 ### Tuya Protocol
 
@@ -170,9 +177,16 @@ Tuya devices use a proprietary protocol on cluster 0xEF00 (61184).
 | 111 | Temp Sampling Interval | VALUE | 5-3600 seconds |
 | 112 | Soil Sampling Interval | VALUE | 5-3600 seconds |
 
+## Code Quality & Style
+
+- Use named constants for all datapoint IDs and protocol values (no magic numbers)
+- TypeScript: extract const arrays to explicitly typed `number[]` before using `.includes()`
+- Research library source code (node_modules, GitHub) before implementing workarounds
+
 ## External References
 
 - [Zigbee2MQTT Tuya implementation](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/lib/tuya.ts) - Reference for Tuya protocol handling
 - [Homey Zigbee Driver docs](https://apps-sdk-v3.developer.homey.app/tutorial-Zigbee.html)
 - [zigbee-clusters source](https://github.com/athombv/node-zigbee-clusters)
+
 
