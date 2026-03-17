@@ -16,5 +16,8 @@
   },
   "1.0.5": {
     "en": "Add experimental support for ZG-227Z"
+  },
+  "1.0.6": {
+    "en": "Add ZG-222Z water leak sensor driver"
   }
 }
