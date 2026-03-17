@@ -189,4 +189,10 @@ Tuya devices use a proprietary protocol on cluster 0xEF00 (61184).
 - [Homey Zigbee Driver docs](https://apps-sdk-v3.developer.homey.app/tutorial-Zigbee.html)
 - [zigbee-clusters source](https://github.com/athombv/node-zigbee-clusters)
 
+## Cursor Cloud specific instructions
 
+- **No external services required.** Build, lint, and tests run entirely locally after `npm install`.
+- **`homey app run` cannot run in this environment** — it requires a physical Homey Pro on the network. All CI-viable verification is done via `npm run build`, `npm run lint`, and `npm run test`.
+- **Tests require build first.** `npm run test` already chains `npm run build`, so running `npm test` alone is sufficient.
+- **Pre-existing lint errors.** The repo has ~22 pre-existing ESLint style errors (trailing spaces, key-spacing) in `device.ts` and `zg303zDatapoints.ts`. `npm run lint` exits non-zero; this is expected.
+- Dev commands are documented in the "Development Commands" section above.
