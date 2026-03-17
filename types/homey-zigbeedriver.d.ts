@@ -13,6 +13,7 @@ declare module 'homey-zigbeedriver' {
     getSetting(key: string): any;
     setCapabilityValue(capability: string, value: any): Promise<void>;
     onNodeInit(options: { zclNode: any }): Promise<void>;
+    registerCapability(capabilityId: string, cluster: any, config?: any): void;
   }
 
   export const CLUSTER: any;
