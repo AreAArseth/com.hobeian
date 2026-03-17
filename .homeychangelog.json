@@ -13,5 +13,8 @@
   },
   "1.0.4": {
     "en": "Update description. "
+  },
+  "1.0.5": {
+    "en": "Add experimental support for ZG-227Z"
   }
 }
