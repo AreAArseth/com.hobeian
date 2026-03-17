@@ -191,8 +191,10 @@ Tuya devices use a proprietary protocol on cluster 0xEF00 (61184).
 
 ## Cursor Cloud specific instructions
 
-- **No external services required.** Build, lint, and tests run entirely locally after `npm install`.
-- **`homey app run` cannot run in this environment** — it requires a physical Homey Pro on the network. All CI-viable verification is done via `npm run build`, `npm run lint`, and `npm run test`.
+- **Docker is installed** and configured (fuse-overlayfs storage driver, iptables-legacy). Start the daemon with `sudo dockerd &>/tmp/dockerd.log &` before using Docker-dependent commands.
+- **Homey CLI** (`homey` v4.x) is installed globally. It authenticates automatically via the `HOMEY_PAT` environment variable (no interactive login needed).
+- **`homey app run` requires a Homey device** registered to the account. It runs the app in a Docker container locally (Homey Pro 2023+) and bridges to the Homey via Socket.IO. If `homey list` shows no devices, `homey app run` will block on device selection.
+- **`homey app validate -l verified`** and **`homey app build`** work without a Homey device and are good offline verification steps.
 - **Tests require build first.** `npm run test` already chains `npm run build`, so running `npm test` alone is sufficient.
 - **Pre-existing lint errors.** The repo has ~22 pre-existing ESLint style errors (trailing spaces, key-spacing) in `device.ts` and `zg303zDatapoints.ts`. `npm run lint` exits non-zero; this is expected.
 - Dev commands are documented in the "Development Commands" section above.
