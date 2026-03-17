@@ -1,0 +1,68 @@
+{
+  "id": "zg-227z",
+  "name": {
+    "en": "ZG-227Z Temperature & Humidity Sensor"
+  },
+  "class": "sensor",
+  "platforms": [
+    "local"
+  ],
+  "connectivity": [
+    "zigbee"
+  ],
+  "capabilities": [
+    "measure_temperature",
+    "measure_humidity",
+    "measure_battery"
+  ],
+  "capabilitiesOptions": {
+    "measure_temperature": {
+      "title": {
+        "en": "Temperature"
+      }
+    },
+    "measure_humidity": {
+      "title": {
+        "en": "Humidity"
+      }
+    }
+  },
+  "zigbee": {
+    "manufacturerName": ["HOBEIAN"],
+    "productId": ["ZG-227Z"],
+    "endpoints": {
+      "1": {
+        "clusters": [
+          0,
+          1,
+          3,
+          1026,
+          1029
+        ]
+      }
+    }
+  },
+  "energy": {
+    "batteries": [
+      "AAA",
+      "AAA"
+    ]
+  },
+  "images": {
+    "small": "/drivers/zg-227z/assets/images/small.png",
+    "large": "/drivers/zg-227z/assets/images/large.png"
+  },
+  "pair": [
+    {
+      "id": "list_devices",
+      "template": "list_devices",
+      "navigation": {
+        "next": "add_devices"
+      }
+    },
+    {
+      "id": "add_devices",
+      "template": "add_devices"
+    }
+  ]
+}
