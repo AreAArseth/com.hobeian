@@ -29,6 +29,12 @@ A battery-powered Zigbee soil moisture sensor with temperature and humidity sens
 - Power: 2x AAA batteries
 - Protocol: Tuya Zigbee (Cluster 0xEF00)
 
+## Driver Image Credits
+
+- `drivers/zg-227z/assets/images/small.png` and `drivers/zg-227z/assets/images/large.png` are adapted from the Zigbee2MQTT device image for ZG-227Z: https://www.zigbee2mqtt.io/images/devices/ZG-227Z.png (device page: https://www.zigbee2mqtt.io/devices/ZG-227Z.html).
+- `drivers/zg-222z/assets/images/small.png` and `drivers/zg-222z/assets/images/large.png` are adapted from the Zigbee2MQTT device image for ZG-222Z: https://www.zigbee2mqtt.io/images/devices/ZG-222Z.png (device page: https://www.zigbee2mqtt.io/devices/ZG-222Z.html).
+- `drivers/zg-303z/assets/images/small.png` and `drivers/zg-303z/assets/images/large.png` are kept unchanged in this update. Reference device page: https://www.zigbee2mqtt.io/devices/ZG-303Z.html.
+
 ## Installation
 
 1. Install the app from the Homey App Store
